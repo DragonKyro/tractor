@@ -57,6 +57,14 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Heuristic AI (Easy / Normal) deciding from a seat's own view only; Normal beats Easy 30/30 in 4-player matches
 - [x] Options to hide the defenders' captured points and the record of played cards (the table keeps count; everything shows at the round's end)
 - [x] "End round early": offered only when public information proves nothing left can change the result — unseen point cards, the largest possible kitty multiplier and future throw penalties all included (`canEndRoundEarly`); checked against playing the round out in AI games (`earlyEnd.test.ts`)
+- [x] Live deal one card at a time, each player drawing in turn: auto-draw or click to draw (D / Space); deal speed and the post-deal "time to overcall" (3 / 6 / 12 s, with a countdown) are set right in the deal panel; "No more bids" lets an AI landlord take the kitty at once
+- [x] Animations (cards fly in from their seat, tricks sweep to the winner, drawn cards pop in, the active seat glows; reduced-motion respected) and synthesized sounds (toggle in Settings)
+- [x] Drag across cards to select several; keyboard: Enter plays / confirms, Esc clears, H hints
+- [x] Team view: a banner says who you're with (and, in Finding Friends, which friends are still hidden and whether a card you hold could make you one); seat badges ringed by side
+- [x] Watch mode for all-AI tables with every hand face up
+- [x] Match review: stats (levels by round, attackers' points against the threshold, round table — each chart with a table view) and a move-by-move replay of finished rounds
+- [x] Phones: landscape layout, side panel as a drawer, wider card spacing and taller buttons on touch screens
+- [x] Online: a disconnected player's turn goes to the AI after 30 s (their draws at once); a connected player who doesn't draw for 20 s gets the card drawn for them
 - [x] Hot-seat with pass-the-device screens
 - [x] Online rooms: lobby, seats (reorder for partners), options, chat, presence, spectators, rejoin by link, driver hand-off, rollback on races
 - [x] Firebase: `/tractor` namespace, rules deployed through the merge script, live round-trip test
@@ -69,10 +77,5 @@ AI
 - [ ] Better heuristics: void / trump tracking per player, smarter friend calls and partner inference in Finding Friends, deliberate throws, end-game kitty play
 
 UI / UX
-- [ ] Animations (deal, card play, trick sweep) and sounds
-- [ ] Drag-to-select and keyboard shortcuts in the hand
-- [ ] Phone landscape layout, larger tap targets for big hands
-- [ ] Post-game match stats and replay (as in catan / card-collecting)
-- [ ] "Show all hands" for all-AI tables (watch mode)
-- [ ] Clear "who is on my team" view in Finding Friends as friends reveal
-- [ ] Hand off an offline human's seat to the AI after a timeout (online)
+- [ ] Try the offline hand-off and the online draw flow with real people on several devices (covered by unit / fake-server tests and typechecks, not yet by hand)
+- [ ] Deal animation from the deck to each seat (cards currently pop into your hand)

@@ -1,6 +1,7 @@
 // One playing card, drawn from the SVG faces in public/cards (Adrian
 // Kennard's CC0 deck, via the shengji project). `card` null draws the back.
 
+import type { MouseEvent } from 'react';
 import { cardLabel, type Card } from '@/game/cards';
 import { usePrefs } from '@/store/prefsStore';
 
@@ -28,7 +29,7 @@ export function CardView({
   /** A gold outline (e.g. a trick's winning play, a card from the kitty). */
   highlight?: boolean;
   badge?: string;
-  onClick?: () => void;
+  onClick?: (e: MouseEvent<HTMLButtonElement>) => void;
   title?: string;
 }) {
   const fourColor = usePrefs((s) => s.fourColor);

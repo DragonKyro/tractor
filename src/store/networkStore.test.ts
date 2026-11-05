@@ -84,6 +84,14 @@ async function step(devices: Device[]): Promise<boolean> {
     return true;
   }
   if (s.round.stage === 'roundOver') return false;
+  // A human seat's turn to draw: its own device draws.
+  const drawer = host.engine.drawingSeat(s);
+  if (drawer !== null) {
+    const owner = devices.find((d) => d.uuid === s.seats[drawer]!.id)!;
+    expect(owner.dispatch({ type: 'draw', seat: drawer })).toBeNull();
+    await flush();
+    return true;
+  }
   const seat = host.engine.activeSeat(s);
   if (seat === null) return false;
   const owner = devices.find((d) => d.uuid === s.seats[seat]!.id)!;
@@ -125,16 +133,20 @@ describe('online tractor', () => {
     const { host, guest } = await table();
     await host.net().hostStartMatch();
     await flush();
-    // Deal until the guest can bid.
-    let guard = 0;
-    while (guest.engine.validBidsFor(guest.state()!, 1).length === 0 && guard++ < 30) {
-      host.dispatch({ type: 'draw' }, true);
+    // Deal (each seat's own device draws for it) until the guest can bid.
+    const drawNext = async () => {
+      const seat = host.engine.drawingSeat(host.state()!)!;
+      (seat === 1 ? guest : host).dispatch({ type: 'draw', seat }, seat !== 1);
       await flush();
-    }
+    };
+    let guard = 0;
+    while (guest.engine.validBidsFor(guest.state()!, 1).length === 0 && guard++ < 120) await drawNext();
+    // Line the deal up so the host's next draw is an AI seat's.
+    while (host.engine.drawingSeat(host.state()!) === 1 && guard++ < 200) await drawNext();
     const bid = guest.engine.validBidsFor(guest.state()!, 1)[0];
     if (!bid) return; // no bidding card this deal — nothing to race
     fakeServer().holdWrites = true;
-    host.dispatch({ type: 'draw' }, true);
+    host.dispatch({ type: 'draw', seat: host.engine.drawingSeat(host.state()!)! }, true);
     guest.dispatch({ type: 'bid', seat: 1, card: bid.card, count: bid.count });
     releaseWrites();
     await flush();

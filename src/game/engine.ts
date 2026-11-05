@@ -130,6 +130,7 @@ function emptyRound(number: number, dealer: number, n: number): RoundState {
     revealed: 0,
     bidTurn: null,
     passes: 0,
+    bidDone: [],
     landlord: null,
     trump: null,
     friends: [],
@@ -274,6 +275,18 @@ export function canRedeal(state: TractorState): boolean {
   );
 }
 
+/** Live deal: whose turn it is to draw the next card (null once the deck is out). */
+export function drawingSeat(state: TractorState): number | null {
+  const r = state.round;
+  return state.status === 'playing' && r.stage === 'draw' && r.deck.length > 0 ? r.dealTo : null;
+}
+
+/** After a live deal: `seat` may say it has no more bids (so an AI landlord needn't wait for it). */
+export function canSayDoneBidding(state: TractorState, seat: number): boolean {
+  const r = state.round;
+  return state.status === 'playing' && r.stage === 'draw' && r.deck.length === 0 && !r.bidDone.includes(seat) && landlordToBe(state) !== seat;
+}
+
 /** The seat whose decision the round waits on, or null (live deal, between rounds). */
 export function activeSeat(state: TractorState): number | null {
   if (state.status !== 'playing') return null;
@@ -342,7 +355,13 @@ function reduce(s: TractorState, a: Action): void {
   switch (a.type) {
     case 'draw': {
       if (r.stage !== 'draw' || r.deck.length === 0) fail('Nothing left to deal.');
-      for (let i = 0; i < n && r.deck.length > 0; i++) dealOne(r, n);
+      if (a.seat !== r.dealTo) fail("It isn't your turn to draw.");
+      dealOne(r, n);
+      return;
+    }
+    case 'doneBidding': {
+      if (!canSayDoneBidding(s, a.seat)) fail('Nothing to finish.');
+      r.bidDone.push(a.seat);
       return;
     }
     case 'bid': {
@@ -351,6 +370,7 @@ function reduce(s: TractorState, a: Action): void {
       if (!isValidBid(bid, validBidsFor(s, a.seat))) fail('That bid is not allowed.');
       const reinforcing = r.bids.length > 0 && r.bids[r.bids.length - 1]!.seat === a.seat;
       r.bids.push(bid);
+      r.bidDone = []; // an overcall gives everyone another chance
       log(s, 'bid', `${seatName(s, a.seat)} ${reinforcing ? 'reinforces with' : 'declares'} ${bidText(bid)}.`, a.seat);
       if (r.stage === 'bid') {
         r.passes = 0;

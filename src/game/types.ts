@@ -97,6 +97,8 @@ export interface RoundState {
   bidTurn: number | null;
   /** Turn bidding: consecutive passes. */
   passes: number;
+  /** Live bidding, after the deal: seats that said they have no more bids. */
+  bidDone: number[];
   landlord: number | null;
   trump: Trump | null;
   friends: Friend[];
@@ -151,8 +153,10 @@ export interface TractorState {
 }
 
 export type Action =
-  /** Live bidding: deal one card to every player (driven by the host / local device). */
-  | { type: 'draw' }
+  /** Live bidding: `seat` draws the next card (it must be their turn: round.dealTo). */
+  | { type: 'draw'; seat: number }
+  /** After a live deal: no more bids from `seat`. */
+  | { type: 'doneBidding'; seat: number }
   | { type: 'bid'; seat: number; card: Card; count: number }
   /** Turn bidding: decline to bid this turn. */
   | { type: 'pass'; seat: number }

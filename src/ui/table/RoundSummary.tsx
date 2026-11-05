@@ -17,9 +17,10 @@ interface Props {
   waitingText?: string;
   /** Hide the summary to look at the table (it comes back with the button). */
   onHide?: () => void;
+  onReview?: (kind: 'stats' | 'replay') => void;
 }
 
-export function RoundSummary({ state, onNextRound, onPlayAgain, onLobby, waitingText, onHide }: Props) {
+export function RoundSummary({ state, onNextRound, onPlayAgain, onLobby, waitingText, onHide, onReview }: Props) {
   const res = state.round.result;
   if (!res) return null;
   const m = materialize(scoringParams(state.config), state.rules.numDecks, state.rules.numDecks * 100);
@@ -97,6 +98,8 @@ export function RoundSummary({ state, onNextRound, onPlayAgain, onLobby, waiting
           {over && onPlayAgain && <button onClick={onPlayAgain}>🔁 Play again</button>}
           {over && onLobby && <button className="secondary" onClick={onLobby}>Lobby</button>}
           {over && !onPlayAgain && <span className="lobby-hint">{waitingText ?? 'Waiting for the host…'}</span>}
+          {onReview && <button className="secondary" onClick={() => onReview('stats')}>📊 Stats</button>}
+          {onReview && <button className="secondary" onClick={() => onReview('replay')}>⏪ Replay</button>}
           {onHide && <button className="secondary" onClick={onHide}>See the table</button>}
         </div>
       </div>
