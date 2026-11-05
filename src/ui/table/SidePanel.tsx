@@ -6,7 +6,7 @@ import { cardLabel, totalPoints } from '@/game/cards';
 import { ordinalText } from '@/game/engine';
 import type { TractorState } from '@/game/types';
 import { usePrefs, type AiSpeed } from '@/store/prefsStore';
-import { levelText, roleOf } from './labels';
+import { levelText, logLine, pointsHidden, roleOf } from './labels';
 
 type Tab = 'players' | 'log' | 'settings';
 
@@ -54,7 +54,9 @@ function Players({ state }: { state: TractorState }) {
                 </td>
                 <td>{levelText(state.levels[i]!)}</td>
                 <td>{ROLE_LABEL[role]}</td>
-                <td>{totalPoints(r.captured[i]!) || ''}</td>
+                <td title={pointsHidden(state, i) ? 'Hidden until the round ends' : undefined}>
+                  {pointsHidden(state, i) ? '—' : totalPoints(r.captured[i]!) || ''}
+                </td>
               </tr>
             );
           })}
@@ -107,7 +109,7 @@ function Log({ state }: { state: TractorState }) {
       {state.log.slice(-120).map((e) => (
         <div key={e.n} className={`log-row log-${e.kind}`}>
           {e.seat !== undefined && <span className="seat-dot" style={{ background: state.seats[e.seat]?.color }} />}
-          {e.text}
+          {logLine(state, e)}
         </div>
       ))}
     </div>

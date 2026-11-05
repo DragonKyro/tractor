@@ -57,6 +57,7 @@ Project `github-games-e7c7d`, web app "Tractor" (config in `src/net/firebaseConf
 ## Conventions
 
 - Keep the README checklist current: tick what's done, add what's discovered.
-- Rule changes: add or port a test (shengji's Rust tests are the reference — `trick.test.ts` ports trick.rs), and make sure `engine.test.ts`'s full AI matches still finish.
+- Rule changes: add or port a test (shengji's Rust tests are the reference — `trick.test.ts` ports trick.rs; `rules.test.ts` ports the bidding / scoring / game-state tests and holds the scenario tests, built with `src/game/testing.ts`'s `scenario()` which sets hands, kitty, levels and landlord directly), and make sure `engine.test.ts`'s full AI matches still finish.
+- The one deliberate difference from shengji: when a follow can be read several ways, a later play must beat *every* winning reading of the current winner (`computeWinner` in `trick.ts`); see the README's "Rule decisions".
 - Windows + Git Bash: heredocs with non-ASCII text can break; write scripts to files. Use `MSYS_NO_PATHCONV=1` for firebase-tools database paths.
 - The local npm registry is an Artifactory proxy; CI uses `npm install` against npmjs.org via the project `.npmrc` (the lockfile carries local URLs).

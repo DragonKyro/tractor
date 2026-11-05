@@ -7,7 +7,7 @@ import { activeSeat, bidText } from '@/game/engine';
 import type { PlayedCards } from '@/game/trick';
 import type { TractorState } from '@/game/types';
 import { CardRow, CardView } from '../CardView';
-import { levelText, roleOf } from './labels';
+import { levelText, pointsHidden, roleOf } from './labels';
 
 interface Props {
   state: TractorState;
@@ -74,7 +74,7 @@ export function Felt({ state, bottom }: Props) {
                 <span className="mini-back" />
                 {r.hands[i]!.length}
               </span>
-              {r.stage === 'play' && totalPoints(r.captured[i]!) > 0 && (
+              {r.stage === 'play' && totalPoints(r.captured[i]!) > 0 && !pointsHidden(state, i) && (
                 <span className="seat-badge-points" title="Points captured">{totalPoints(r.captured[i]!)}</span>
               )}
               {isActive && <span className="seat-badge-turn">{seat.isAI ? 'thinking…' : 'to play'}</span>}
@@ -116,7 +116,7 @@ export function Felt({ state, bottom }: Props) {
         {r.stage === 'play' && showingLast && lastTrick && (
           <div className="felt-deck felt-last">
             <span>
-              {state.seats[lastTrick.winner]!.name} won the trick{lastTrick.points ? ` (+${lastTrick.points})` : ''}
+              {state.seats[lastTrick.winner]!.name} won the trick{lastTrick.points && !pointsHidden(state, lastTrick.winner) ? ` (+${lastTrick.points})` : ''}
             </span>
           </div>
         )}

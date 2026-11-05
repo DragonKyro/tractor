@@ -67,6 +67,8 @@ export interface RoundResult {
   kitty: Card[];
   /** Seats that passed the final rank this round (the game is over when non-empty). */
   winners: number[];
+  /** Ended before the last trick because nothing left could change the result. */
+  endedEarly?: boolean;
 }
 
 export interface RoundState {
@@ -119,6 +121,10 @@ export interface LogEntry {
   kind: LogKind;
   text: string;
   seat?: number;
+  /** The line without card / point details (shown instead while the round's hide options apply). */
+  bare?: string;
+  /** Round the entry belongs to (set with `bare`). */
+  round?: number;
 }
 
 export interface TractorState {
@@ -159,6 +165,8 @@ export type Action =
   | { type: 'exchange'; seat: number; bury: Card[]; friends: FriendCall[] }
   /** `format` picks a reading of an ambiguous lead (an index into possibleFormats). */
   | { type: 'play'; seat: number; cards: Card[]; format?: number }
+  /** Stop the round once nothing left can change its result (canEndRoundEarly); `seat` is who asked. */
+  | { type: 'endRoundEarly'; seat: number }
   | { type: 'nextRound' };
 
 export type ActionType = Action['type'];

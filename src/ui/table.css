@@ -224,6 +224,8 @@ button.card:hover { filter: brightness(1.04); }
 .action-error { color: var(--danger); font-size: 13px; }
 .action-reading { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
 .bid-button { background: var(--gold); color: #241a00; }
+.end-early { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid var(--border); padding-top: 8px; }
+.summary-early { margin-left: 8px; vertical-align: middle; }
 .friend-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
 .friend-call { display: inline-flex; gap: 4px; align-items: center; }
 .friend-call select { padding: 4px 6px; }

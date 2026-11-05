@@ -138,19 +138,28 @@ export function playCards(
   return { trick: next, hand: removeCards(hand, cards), failedThrow };
 }
 
-/** The seat whose play is currently best. */
+/**
+ * The seat whose play is currently best.
+ *
+ * A follow to a throw can sometimes be read more than one way (trump
+ * 7♠7♠9♠9♠ on pair + two singles is "pair of 9s + 7, 7" or "pair of 7s +
+ * 9, 9"). Ties go to the earlier player, so ambiguity does too: a play takes
+ * the trick only if some reading of it beats *every* winning reading of the
+ * current winner. (shengji instead keeps whichever reading its search finds
+ * first, so its answer depends on search order.)
+ */
 export function computeWinner(trick: TrickState, trump: Trump, policy: ThrowEvaluationPolicy): number | null {
   const format = trick.format;
   const lead = trick.plays[0];
   if (!format || !lead) return null;
   let winnerSeat = lead.seat;
-  let winnerUnits: TrickUnit[] = normalizeUnits(trump, format, format.units);
+  let winnerReadings: TrickUnit[][] = [normalizeUnits(trump, format, format.units)];
   for (let i = 1; i < trick.plays.length; i++) {
     const play = trick.plays[i]!;
-    const m = matchFormat(trump, format, play.cards).find((units) => defeats(trump, units, winnerUnits, policy));
-    if (m) {
+    const winning = matchFormat(trump, format, play.cards).filter((units) => winnerReadings.every((w) => defeats(trump, units, w, policy)));
+    if (winning.length > 0) {
       winnerSeat = play.seat;
-      winnerUnits = m;
+      winnerReadings = winning;
     }
   }
   return winnerSeat;

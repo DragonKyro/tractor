@@ -33,7 +33,7 @@ export function RoundSummary({ state, onNextRound, onPlayAgain, onLobby, waiting
     <div className="summary-backdrop">
       <div className="summary-card" role="dialog" aria-label="Round summary">
         {over && <div className="summary-winners">🏆 {(state.winners ?? []).map((w) => state.seats[w]!.name).join(' & ')} win the game!</div>}
-        <h3>Round {res.round}</h3>
+        <h3>Round {res.round}{res.endedEarly && <span className="online-tag summary-early">ended early</span>}</h3>
         <p className="summary-sub">
           Landlord {state.seats[res.landlord]!.name} · trump{' '}
           <span className={trump.red ? 'red' : ''}>

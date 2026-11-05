@@ -7,6 +7,7 @@ import { RANKS, SUITS, SUIT_SYMBOL, cardLabel, rankLabel, type Card, type Rank, 
 import {
   activeSeat,
   bidText,
+  canEndRoundEarly,
   canPickUp,
   canRedeal,
   canRevealKitty,
@@ -118,10 +119,17 @@ export function ActionPanel({ state, viewer, hand, selected, setSelected, dispat
 
   // -------------------------------------------------------- tricks
   const trick = r.trick!;
+  const endEarly = viewer !== null && canEndRoundEarly(state) && (
+    <div className="end-early">
+      <span className="lobby-hint">Nothing left to play can change this round's result.</span>
+      <button className="secondary" onClick={() => act({ type: 'endRoundEarly', seat: viewer })}>End round early</button>
+    </div>
+  );
   if (!mine || viewer === null) {
     return (
       <div className="action-panel">
         <div className="action-prompt">{active === null ? '' : `Waiting for ${name(state, active)}…`}</div>
+        {endEarly}
       </div>
     );
   }
@@ -174,6 +182,7 @@ export function ActionPanel({ state, viewer, hand, selected, setSelected, dispat
       {!format && readings.length === 1 && readings[0]!.length > 1 && (
         <div className="lobby-hint">This is a throw — if anyone can beat part of it, only that part is played.</div>
       )}
+      {endEarly}
     </div>
   );
 }

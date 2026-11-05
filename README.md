@@ -30,6 +30,10 @@ npm run dev          # http://localhost:5173/tractor/
 
 Firebase project `github-games-e7c7d` (web app "Tractor"), **shared with other apps** (catan, card-collecting, …). Everything this app stores lives under `/tractor` in the Realtime Database, and `database.rules.json` defines only the `tractor` key. Because a database has a single rules set, `firebase deploy --only database` runs `scripts/merge-db-rules.mjs` first: it reads the live rules, swaps in the `tractor` key and keeps every other app's key untouched. Rooms are cleaned up about a week after they're made.
 
+## Rule decisions
+
+Everything follows shengji, with one deliberate exception. Sometimes a play answering a throw can be grouped into the lead's shape in more than one way. For example, trumping "pair + two singles" with 7♠7♠9♠9♠ reads as "pair of 9s + 7, 7" or "pair of 7s + 9, 9". A later player beating one reading but not the other would win or lose depending on which grouping shengji's search happens to find first. Here, ambiguity goes to the earlier player, the same way exact ties do: to take the trick, a play must beat every way the current winner's cards can be read.
+
 ## Credits
 
 - Rules reference and test scenarios: [shengji](https://github.com/rbtying/shengji) by Robert Ying (MIT).
@@ -44,30 +48,21 @@ Firebase project `github-games-e7c7d` (web app "Tractor"), **shared with other a
 - [x] Follow legality with shengji's decomposition order and all five draw policies (incl. "longer tuples protected")
 - [x] Throws: checked against every other hand; a failed throw plays only the beatable unit (optional 10-point penalty)
 - [x] Trick winners with all three throw-evaluation policies
-- [x] Ported 43 shengji trick tests (all pass)
+- [x] Ported shengji's tests: 43 trick tests, the bidding and scoring tables, and its game-state scenarios (bid sequence, legal friend calls, must-defend level sequences, a 17-trick six-player Finding Friends game, the short-handed bonus)
+- [x] Scenario tests for the fiddly rules (`src/game/rules.test.ts`): overcalling to become landlord, point cards, the kitty multiplier, thresholds per deck count, "the 2nd A♠" friend calls, the landlord playing a called card, friends' earlier points, failed throws and the penalty in both directions, take-overs, must-defend and winning the game
 - [x] Bidding: live while dealing or in turns after the deal; bid / joker / reinforcement policies; first-landlord choice; redeal; kitty reveal when nobody bids
 - [x] Kitty exchange; Finding Friends calls ("the 2nd A♠"), reveal on play, double-join policy, friend-call restrictions
 - [x] Scoring with shengji's step table, kitty multiplier (×2·unit or 2^unit), short-handed bonus level, must-defend rules, next landlord, game end past the final rank
 - [x] 2–12 players, 1–12 decks, auto or explicit kitty size (removes low cards to deal evenly)
 - [x] Heuristic AI (Easy / Normal) deciding from a seat's own view only; Normal beats Easy 30/30 in 4-player matches
+- [x] Options to hide the defenders' captured points and the record of played cards (the table keeps count; everything shows at the round's end)
+- [x] "End round early": offered only when public information proves nothing left can change the result — unseen point cards, the largest possible kitty multiplier and future throw penalties all included (`canEndRoundEarly`); checked against playing the round out in AI games (`earlyEnd.test.ts`)
 - [x] Hot-seat with pass-the-device screens
 - [x] Online rooms: lobby, seats (reorder for partners), options, chat, presence, spectators, rejoin by link, driver hand-off, rollback on races
 - [x] Firebase: `/tractor` namespace, rules deployed through the merge script, live round-trip test
 - [x] UI: home, lobbies, options (with house rules), felt table, hand with selection, bid / exchange / friend / play panels, hints, log, round summary, rules page, four-color cards, AI speed
 
 ### To do
-
-Rules
-- [ ] Kitty theft (over-bidding during the exchange and re-exchanging; `Bid.epoch` is already carried)
-- [ ] Take-backs (bids and plays) for casual tables
-- [ ] Bombs and rainbows (shengji's compound formats)
-- [ ] Jack variation ("back to 2" when the last trick is won with a jack)
-- [ ] Hide landlord points / hide played cards options
-- [ ] Short decks (excluding low ranks or jokers per deck)
-- [ ] End a round early once the outcome can't change
-- [ ] Custom scoring tables (per-deck step adjustments, dead zone, number of steps)
-- [ ] Port shengji's bidding.rs and scoring.rs tests too (only trick.rs is ported so far)
-- [ ] Known edge differences from shengji: when a follow can be read several ways, the first winning reading is kept (shengji keeps the first in its search order); leads tie-break the same way but can differ on exotic multi-deck shapes
 
 AI
 - [ ] Learned AI at several difficulties (see `training/README.md`): observation encoder, env server, PPO trainer, exported policies loaded by `prepareAi`
@@ -81,6 +76,3 @@ UI / UX
 - [ ] "Show all hands" for all-AI tables (watch mode)
 - [ ] Clear "who is on my team" view in Finding Friends as friends reveal
 - [ ] Hand off an offline human's seat to the AI after a timeout (online)
-
-Project
-- [ ] Turn on GitHub Pages for the repo (`.github/workflows/deploy.yml` builds and deploys on push to main)

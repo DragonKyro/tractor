@@ -54,6 +54,10 @@ export interface TractorConfig {
   stepSizePerDeck: number;
   bonusLevelForSmallerTeam: boolean;
   revealKittyAtEnd: boolean;
+  /** Don't show the defenders' captured points during a round (players keep count themselves). */
+  hideLandlordPoints: boolean;
+  /** No record of played cards: the log says who played how many, not what (the trick on the table stays visible). */
+  hidePlayedCards: boolean;
 }
 
 export const MIN_PLAYERS = 2;
@@ -86,6 +90,8 @@ export function defaultConfig(numPlayers = 4): TractorConfig {
     stepSizePerDeck: DEFAULT_SCORING.stepSizePerDeck,
     bonusLevelForSmallerTeam: true,
     revealKittyAtEnd: true,
+    hideLandlordPoints: false,
+    hidePlayedCards: false,
   };
 }
 
