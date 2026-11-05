@@ -1,0 +1,6 @@
+{
+  "database": {
+    "rules": ".firebase/database.rules.deploy.json",
+    "predeploy": "node scripts/merge-db-rules.mjs"
+  }
+}

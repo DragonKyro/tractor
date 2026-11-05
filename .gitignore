@@ -1,0 +1,10 @@
+*.log
+.DS_Store
+.firebase
+.vite
+__pycache__
+coverage
+dist
+node_modules
+training/dist
+training/runs

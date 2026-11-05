@@ -1,0 +1,78 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "tractor": {
+      "roomDays": {
+        ".read": "auth != null",
+        ".indexOn": ".value",
+        "$day": {
+          ".write": "auth != null && (newData.exists() || (data.val() <= now - 604800000 && !root.child('tractor/roomIndex/' + $day).exists()))",
+          ".validate": "$day.matches(/^[0-9]{5,6}$/) && newData.isNumber() && newData.val() >= now - 600000 && newData.val() <= now + 87000000"
+        }
+      },
+      "roomIndex": {
+        "$day": {
+          ".read": "auth != null && root.child('tractor/roomDays/' + $day).val() <= now - 604800000",
+          "$code": {
+            ".write": "auth != null && (newData.exists() ? !data.exists() : root.child('tractor/roomDays/' + $day).val() <= now - 604800000)",
+            ".validate": "$code.matches(/^[A-Z0-9]{4,6}$/) && newData.val() === true"
+          }
+        }
+      },
+      "rooms": {
+        "$code": {
+          ".read": "auth != null",
+          ".write": "auth != null && (newData.exists() ? newData.child('meta/hostUid').val() === auth.uid && !data.exists() : !data.exists() || (data.child('meta/createdAt').val() < now - 604800000 && !data.child('presence').exists()))",
+          ".validate": "$code.matches(/^[A-Z0-9]{4,6}$/) && newData.hasChildren(['meta', 'lobby'])",
+          "meta": {
+            ".validate": "newData.hasChildren(['hostUuid', 'hostUid', 'createdAt', 'build', 'v'])",
+            "hostUuid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "hostUid": { ".validate": "newData.isString() && newData.val() === auth.uid" },
+            "createdAt": { ".validate": "newData.isNumber() && newData.val() <= now" },
+            "build": { ".validate": "newData.isString() && newData.val().length <= 40" },
+            "v": { ".validate": "newData.val() === 1" },
+            "$other": { ".validate": false }
+          },
+          "lobby": {
+            ".write": "auth != null && data.exists()",
+            ".validate": "newData.isString() && newData.val().length < 20000"
+          },
+          "matches": {
+            "$match": {
+              ".validate": "$match.matches(/^m[0-9]{1,5}$/)",
+              "start": {
+                ".write": "auth != null && !data.exists() && root.child('tractor/rooms/' + $code + '/meta/hostUid').val() === auth.uid",
+                ".validate": "newData.isString() && newData.val().length < 20000"
+              },
+              "actions": {
+                "$seq": {
+                  ".write": "auth != null && !data.exists() && root.child('tractor/rooms/' + $code + '/matches/' + $match + '/start').exists()",
+                  ".validate": "$seq.matches(/^a[0-9]{6}$/) && newData.isString() && newData.val().length < 8000"
+                }
+              },
+              "$other": { ".validate": false }
+            }
+          },
+          "chat": {
+            "$id": {
+              ".write": "auth != null && !data.exists()",
+              ".validate": "newData.isString() && newData.val().length < 4000"
+            }
+          },
+          "presence": {
+            "$conn": {
+              ".write": "auth != null && (newData.exists() ? newData.child('uid').val() === auth.uid && (!data.exists() || data.child('uid').val() === auth.uid) : !data.exists() || data.child('uid').val() === auth.uid)",
+              ".validate": "newData.hasChildren(['uid', 'uuid', 'name'])",
+              "uid": { ".validate": "newData.isString()" },
+              "uuid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+              "name": { ".validate": "newData.isString() && newData.val().length <= 40" },
+              "$other": { ".validate": false }
+            }
+          },
+          "$other": { ".validate": false }
+        }
+      }
+    }
+  }
+}
