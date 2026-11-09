@@ -32,7 +32,6 @@
 }
 .seat-ai-toggle { display: flex; gap: 4px; align-items: center; font-size: 13px; }
 .seat-move { display: inline-flex; gap: 2px; }
-.seat-level { font-size: 12px; padding: 3px 6px; max-width: 96px; }
 
 /* ---------- options form ---------- */
 

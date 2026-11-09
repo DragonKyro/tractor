@@ -2,17 +2,23 @@
 the policy export the TypeScript side runs (src/ai/nn/runtime.ts, the same
 layers in the same order).
 
-    seat encoder  each present seat block (637) -> Linear+ReLU per width in arch["seat"] -> e_s,
+    seat encoder  each present seat block (788) -> Linear+ReLU per width in arch["seat"] -> e_s,
                   shared by all 12 seat slots; absent seats give 0
-    trunk         [global block (679), e_0 ... e_11] -> Linear+ReLU per width in arch["trunk"] -> h
-    cand tower    each candidate (115) -> Linear+ReLU per width in arch["cand"] -> c_k
+    trunk         [global block (725), e_0 ... e_11] -> Linear+ReLU per width in arch["trunk"] -> h
+    cand tower    each candidate (123) -> Linear+ReLU per width in arch["cand"] -> c_k
     scorer        logit_k = score(ReLU(joint_state(h) + joint_cand(c_k)))      one per candidate
     critic        V = critic(ReLU([h, privileged global, critic_seat(each seat's hand)]))  -- training only
+    belief        for every other seat, its hand: belief([h, e_s]) -> 72 card slots, and the
+                  kitty: kitty_belief(h) -> 72                                     -- training only
 
 The critic sees every hand (privileged.ts): a perfect-information critic for
-an imperfect-information policy, so advantages are far less noisy. It is never
-exported; policy files hold the actor alone ("tractor/seat-mlp@3"), every
-tensor base64 little-endian float16 (default) or float32 with its `dtype`.
+an imperfect-information policy, so advantages are far less noisy. The belief
+heads are an auxiliary task: predict the hidden hands (and the kitty) from what
+the seat has seen, trained against the true hands. Card counting, reading
+voids and reading a partner's discards are what that takes, so the shared
+trunk learns them; the policy reads the same trunk. Neither is exported:
+policy files hold the actor alone ("tractor/seat-mlp@3"), every tensor base64
+little-endian float16 (default) or float32 with its `dtype`.
 """
 
 from __future__ import annotations
@@ -31,6 +37,8 @@ GAME = "tractor"
 ILLEGAL_LOGIT = -1e9
 DEFAULT_ARCH = {"seat": [128, 64], "trunk": [512, 512, 256], "cand": [128, 128], "joint": 256}
 DEFAULT_CRITIC = {"seatWidth": 64, "hidden": 256}
+DEFAULT_BELIEF = {"hidden": 128}
+TRAINING_ONLY = ("critic", "belief", "kitty_belief")
 
 
 def _mlp(n_in: int, widths: list[int]) -> nn.Sequential:
@@ -44,8 +52,9 @@ def _mlp(n_in: int, widths: list[int]) -> nn.Sequential:
 class TractorNet(nn.Module):
     def __init__(self, global_dim: int, seat_dim: int, max_seats: int, cand_dim: int, seat: list[int] | None = None,
                  trunk: list[int] | None = None, cand: list[int] | None = None, joint: int | None = None,
-                 critic: dict | None = None):
-        """critic: {"privGlobal", "privSeat", "seatWidth", "hidden"} for a privileged critic, or None (actor only)."""
+                 critic: dict | None = None, belief: dict | None = None):
+        """critic: {"privGlobal", "privSeat", "seatWidth", "hidden"} for a privileged critic, or None (actor
+        only). belief: {"slots", "hidden"} for the hidden-hand heads, or None."""
         super().__init__()
         seat = list(seat or DEFAULT_ARCH["seat"])
         trunk = list(trunk or DEFAULT_ARCH["trunk"])
@@ -67,6 +76,11 @@ class TractorNet(nn.Module):
             self.critic_seat = _mlp(int(critic["privSeat"]), [cw])
             self.critic = nn.Sequential(nn.Linear(trunk[-1] + int(critic["privGlobal"]) + max_seats * cw, hidden),
                                         nn.ReLU(), nn.Linear(hidden, 1))
+        self.belief_arch = dict(belief) if belief else None
+        if belief:
+            bh, slots = int(belief.get("hidden", DEFAULT_BELIEF["hidden"])), int(belief["slots"])
+            self.belief = nn.Sequential(nn.Linear(trunk[-1] + seat[-1], bh), nn.ReLU(), nn.Linear(bh, slots))
+            self.kitty_belief = nn.Sequential(nn.Linear(trunk[-1], bh), nn.ReLU(), nn.Linear(bh, slots))
 
     def embed(self, glob: torch.Tensor, seats: torch.Tensor, seat_mask: torch.Tensor) -> torch.Tensor:
         """glob (B, G), seats (B, S, seat_dim), seat_mask (B, S) bool -> h (B, trunk[-1])."""
@@ -85,17 +99,29 @@ class TractorNet(nn.Module):
         e = self.critic_seat(priv_seats) * seat_mask.unsqueeze(-1)
         return self.critic(torch.cat([h, priv_glob, e.flatten(1)], 1)).squeeze(-1)
 
+    def beliefs(self, h, seats, seat_mask, detach: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        """Logits of each seat's hand (B, S, slots) and of the kitty (B, slots): sigmoid = count / decks.
+        `detach`: the actor's features are inputs only (no gradient into the seat encoder or trunk)."""
+        e = self.seat(seats) * seat_mask.unsqueeze(-1)
+        if detach:
+            h, e = h.detach(), e.detach()
+        hs = h.unsqueeze(1).expand(-1, e.shape[1], -1)
+        return self.belief(torch.cat([hs, e], -1)), self.kitty_belief(h)
+
+    def actor_parameters(self):
+        return [p for k, p in self.named_parameters() if not k.startswith(TRAINING_ONLY)]
+
     def num_parameters(self, actor_only: bool = False) -> int:
-        return sum(p.numel() for k, p in self.named_parameters() if not (actor_only and k.startswith("critic")))
+        return sum(p.numel() for k, p in self.named_parameters() if not (actor_only and k.startswith(TRAINING_ONLY)))
 
 
 def masked_logits(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return logits.masked_fill(~mask, ILLEGAL_LOGIT)
 
 
-def net_from_arch(arch: dict, critic: dict | None = None) -> TractorNet:
+def net_from_arch(arch: dict, critic: dict | None = None, belief: dict | None = None) -> TractorNet:
     return TractorNet(arch["globalDim"], arch["seatDim"], arch["maxSeats"], arch["candDim"], arch["seat"],
-                      arch["trunk"], arch["cand"], arch["joint"], critic)
+                      arch["trunk"], arch["cand"], arch["joint"], critic, belief)
 
 
 # ---------------------------------------------------------------- batches
@@ -172,7 +198,7 @@ def export_policy(net: TractorNet, path: str, versions: dict, meta: dict | None 
         "game": GAME,
         **versions,
         "arch": net.arch,
-        "tensors": {k: _tensor(v, dtype) for k, v in net.state_dict().items() if not k.startswith("critic")},
+        "tensors": {k: _tensor(v, dtype) for k, v in net.state_dict().items() if not k.startswith(TRAINING_ONLY)},
         "meta": meta or {},
     }
     _atomic_write(path, json.dumps(doc))
@@ -208,7 +234,7 @@ def save_checkpoint(path: str, net: TractorNet, optimizer: torch.optim.Optimizer
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     torch.save({"model": net.state_dict(), "optimizer": optimizer.state_dict(), "arch": net.arch,
-                "critic": net.critic_arch, **state}, tmp)
+                "critic": net.critic_arch, "belief": net.belief_arch, **state}, tmp)
     os.replace(tmp, path)
 
 
@@ -217,8 +243,8 @@ def load_checkpoint(path: str, device: str | torch.device = "cpu") -> dict:
 
 
 def net_from_checkpoint(ckpt: dict, device: str | torch.device = "cpu") -> TractorNet:
-    net = net_from_arch(ckpt["arch"], ckpt.get("critic")).to(device)
-    net.load_state_dict(ckpt["model"])
+    net = net_from_arch(ckpt["arch"], ckpt.get("critic"), ckpt.get("belief")).to(device)
+    net.load_state_dict(ckpt["model"], strict=False)  # a checkpoint without belief heads gets fresh ones
     return net
 
 

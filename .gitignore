@@ -9,4 +9,3 @@ node_modules
 training/dist
 training/runs
 .pytest_cache
-training/benchmarks

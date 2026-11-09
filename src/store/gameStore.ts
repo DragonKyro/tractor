@@ -38,7 +38,7 @@ interface GameStore {
   localPlayerId: PlayerId | null;
   /** The options + lineup the match started from, for "Play again". */
   setup: MatchSetup | null;
-  /** False while this device is loading AI policies for a match it didn't start (an online stand-in). */
+  /** False while this device is loading the AI network for a match it didn't start (an online stand-in). */
   aiReady: boolean;
 
   loadGame(state: TractorState, localPlayerId: PlayerId | null, setup: MatchSetup | null): void;

@@ -105,7 +105,7 @@ describe.skipIf(!LIVE)('online tractor on the real Firebase project', () => {
       } else {
         const seat = host.engine.activeSeat(s)!;
         const owner = [host, guest].find((d) => d.uuid === s.seats[seat]!.id)!;
-        const a = owner.ai.chooseAIAction(owner.state()!, seat, 'normal')!;
+        const a = owner.ai.chooseAIAction(owner.state()!, seat)!;
         expect(owner.dispatch(a)).toBeNull();
       }
       await until(() => {

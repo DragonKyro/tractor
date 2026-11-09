@@ -1,13 +1,14 @@
 """Evaluate a Tractor policy (greedy, as the shipped AI plays).
 
-    python training/tractor/evaluate.py <policy.json>                       # vs the v2 benchmark, 4p Tractor
+    python training/tractor/evaluate.py <policy.json>                       # vs the shipped AI, 4p Tractor
     python training/tractor/evaluate.py <policy.json> --matches 24          # + full duplicate matches
     python training/tractor/evaluate.py <policy.json> --variety 512         # + other tables
     python training/tractor/evaluate.py <policy.json> --vs <other policy.json>
 
 Duplicate deals (the main score): every deal is played twice with the same
 cards, the network's team holding one side's cards and then the other's, the
-benchmark (or another policy file) in the other seats. A pair's score is the mean of
+opponent (the shipped AI, src/ai/nn/policy.json, or `--vs`) in the other
+seats. A pair's score is the mean of
 the two halves, so the luck of the deal cancels and far fewer deals give the
 same precision. On the focus table, 4-player Tractor, the network is one
 fixed-partner team.
@@ -16,6 +17,11 @@ fixed-partner team.
              (0 = as good as the opponent), with its 95% interval over deal pairs
     pairs    share of deal pairs the network came out ahead on / behind on
     landlord how often its side keeps the landlord seat / takes it
+    skills   per player per round, the network's seats next to the opponent's
+             on the same cards (skills.ts): throws tried and the share that
+             failed, trump leads, side-suit tricks won by trumping in, points
+             fed to partners vs given to opponents, the last trick won, and
+             kitty points conceded as defenders
 
 Full matches (`--matches N`): N duplicate pairs of whole matches from 2 to
 past A: how often the network's team wins (the pair average) and how many
@@ -46,7 +52,7 @@ from model import TractorNet, load_policy, policy_inputs, rows_to_tensors  # noq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
-DEFAULT_BENCHMARK = os.path.join(REPO, "training", "benchmarks", "v2-update1500.json")
+SHIPPED_POLICY = os.path.join(REPO, "src", "ai", "nn", "policy.json")
 EVAL_SEED = 424_242
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A", "NT"]
 
@@ -94,11 +100,9 @@ def run_jobs(net: TractorNet, jobs: list[dict], device="cpu", opponent: TractorN
     return out
 
 
-def _vs(vs: str, benchmark: str | None) -> tuple[str, dict, TractorNet | None]:
-    """'benchmark' | a policy path -> (lineup others, env kwargs, Python-side opponent)."""
-    if vs == "benchmark":
-        return "benchmark", {"benchmark_policy": benchmark or DEFAULT_BENCHMARK}, None
-    return "opponent", {}, load_policy(vs)
+def _opponent(vs: str | TractorNet, device) -> TractorNet:
+    """A policy file, or a network already loaded."""
+    return (load_policy(vs) if isinstance(vs, str) else vs).to(device)
 
 
 def _split(total: int, procs: int, envs: int) -> tuple[int, int, int]:
@@ -108,31 +112,25 @@ def _split(total: int, procs: int, envs: int) -> tuple[int, int, int]:
     return procs, envs, max(1, math.ceil(total / (procs * envs)))
 
 
-def play_duplicate(net: TractorNet, deals: int = 256, vs: str = "benchmark", benchmark: str | None = None,
-                   procs: int = 8, envs: int = 16, seed: int = EVAL_SEED, device="cpu", matches: bool = False,
+def play_duplicate(net: TractorNet, deals: int = 256, vs: str | TractorNet = SHIPPED_POLICY, procs: int = 8,
+                   envs: int = 16, seed: int = EVAL_SEED, device="cpu", matches: bool = False,
                    scenario: dict | None = None) -> list[dict]:
     """`deals` duplicate pairs (rounds, or whole matches) on the focus table, network team vs `vs`."""
-    others, kw, opp = _vs(vs, benchmark)
     procs, envs, per_env = _split(deals, procs, envs)
-    jobs = [{"name": f"dup{k}", "num_envs": envs, "seed": seed + 7919 * k, "lineups": [lineup("team", others)],
+    jobs = [{"name": f"dup{k}", "num_envs": envs, "seed": seed + 7919 * k, "lineups": [lineup("team")],
              "scenario": scenario or {"focus": 1, "turnBidding": 0}, "quota": 2 * per_env, "duplicate": True,
-             "matches": matches, **kw} for k in range(procs)]
-    if opp is not None:
-        opp = opp.to(device)
-    return run_jobs(net, jobs, device, opp)
+             "matches": matches} for k in range(procs)]
+    return run_jobs(net, jobs, device, _opponent(vs, device))
 
 
-def play_variety(net: TractorNet, rounds: int = 512, vs: str = "benchmark", benchmark: str | None = None,
-                 procs: int = 4, envs: int = 32, seed: int = EVAL_SEED + 3, device="cpu") -> list[dict]:
+def play_variety(net: TractorNet, rounds: int = 512, vs: str | TractorNet = SHIPPED_POLICY, procs: int = 4,
+                 envs: int = 32, seed: int = EVAL_SEED + 3, device="cpu") -> list[dict]:
     """Single rounds from the variety mix (every other table) vs `vs`."""
-    others, kw, opp = _vs(vs, benchmark)
     procs, envs, per_env = _split(rounds, procs, envs)
     jobs = [{"name": f"var{k}", "num_envs": envs, "seed": seed + 7919 * k,
-             "lineups": [lineup("one", others), lineup("team", others)], "scenario": {"focus": 0},
-             "quota": per_env, **kw} for k in range(procs)]
-    if opp is not None:
-        opp = opp.to(device)
-    return run_jobs(net, jobs, device, opp)
+             "lineups": [lineup("one"), lineup("team")], "scenario": {"focus": 0},
+             "quota": per_env} for k in range(procs)]
+    return run_jobs(net, jobs, device, _opponent(vs, device))
 
 
 # ---------------------------------------------------------------- summaries
@@ -165,8 +163,34 @@ def _pairs(episodes: list[dict]) -> list[tuple[dict, dict]]:
     return [(p[0], p[1]) for p in by.values() if 0 in p and 1 in p]
 
 
+SKILLS = ("throws", "throwFails", "trumpLeads", "ruffWins", "pointsFed", "pointsGiven", "lastTrick", "kittyBuried",
+          "kittyConceded")
+
+
+def summarize_skills(episodes: list[dict]) -> dict:
+    """Per player per round, the network's seats and the others' (the same deals, so the same cards)."""
+    tot = {side: collections.defaultdict(float) for side in ("net", "opp")}
+    n = {"net": 0, "opp": 0}
+    for e in episodes:
+        sk = e.get("skills")
+        if not sk or e["aborted"] or e["truncated"]:
+            continue
+        mine = set(_learners(e))
+        for seat in range(e["players"]):
+            side = "net" if seat in mine else "opp"
+            n[side] += 1
+            for k in SKILLS:
+                tot[side][k] += sk[k][seat]
+    out: dict = {}
+    for side in ("net", "opp"):
+        m = max(1, n[side])
+        out[side] = {k: tot[side][k] / m for k in SKILLS}
+        out[side]["throwFailRate"] = tot[side]["throwFails"] / tot[side]["throws"] if tot[side]["throws"] else None
+    return out
+
+
 def summarize_duplicate(episodes: list[dict]) -> dict:
-    """Duplicate rounds: per-pair gain, pairs won / lost, landlord keep / take."""
+    """Duplicate rounds: per-pair gain, pairs won / lost, landlord keep / take, skills."""
     gains, keep, take = [], [], []
     for a, b in _pairs(episodes):
         g = [float(np.mean([e["gain"][s] for s in _learners(e)])) for e in (a, b)]
@@ -177,9 +201,10 @@ def summarize_duplicate(episodes: list[dict]) -> dict:
                 keep.append(float(e["landlordWon"]))
             elif not any(s in e["landlordTeam"] for s in mine):
                 take.append(float(not e["landlordWon"]))
+    paired = [e for pair in _pairs(episodes) for e in pair]
     return {"gain": _mean_ci(gains), "ahead": _mean_ci([float(x > 0) for x in gains]),
             "behind": _mean_ci([float(x < 0) for x in gains]), "keep_landlord": _mean_ci(keep),
-            "take_landlord": _mean_ci(take), "pairs": len(gains)}
+            "take_landlord": _mean_ci(take), "pairs": len(gains), "skills": summarize_skills(paired)}
 
 
 def summarize_duplicate_matches(episodes: list[dict]) -> dict:
@@ -232,10 +257,22 @@ def _f(v: dict | None, pct: bool = False) -> str:
     return f"{v['mean']:+.3f}{ci}"
 
 
+def format_skills(sk: dict) -> str:
+    def row(k: str, label: str, fmt: str = "{:.2f}") -> str:
+        a, b = sk["net"].get(k), sk["opp"].get(k)
+        f = lambda v: "-" if v is None else (f"{v:.0%}" if fmt == "%" else fmt.format(v))  # noqa: E731
+        return f"{label} {f(a)} / {f(b)}"
+    return "  skills, network / opponent, per player per round: " + "; ".join([
+        row("throws", "throws"), row("throwFailRate", "failed", "%"), row("trumpLeads", "trump leads"),
+        row("ruffWins", "ruff wins"), row("pointsFed", "points fed", "{:.1f}"), row("pointsGiven", "points given", "{:.1f}"),
+        row("lastTrick", "last trick", "%"), row("kittyConceded", "kitty conceded", "{:.1f}")])
+
+
 def format_duplicate(s: dict, vs: str) -> str:
-    return (f"vs {vs}, duplicate rounds ({s['pairs']} deal pairs): gain {_f(s['gain'])} per round; "
+    line = (f"vs {vs}, duplicate rounds ({s['pairs']} deal pairs): gain {_f(s['gain'])} per round; "
             f"ahead on {_f(s['ahead'], True)} of pairs, behind on {_f(s['behind'], True)}; "
             f"keeps the landlord seat {_f(s['keep_landlord'], True)}, takes it {_f(s['take_landlord'], True)}")
+    return line + ("\n" + format_skills(s["skills"]) if s.get("skills") else "")
 
 
 def format_duplicate_matches(s: dict, vs: str) -> str:
@@ -254,8 +291,7 @@ def format_rounds(s: dict, vs: str) -> str:
 def main(argv: list[str] | None = None) -> dict:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("policy")
-    p.add_argument("--vs", default="benchmark", help="'benchmark' (the v2 network) or a policy file")
-    p.add_argument("--benchmark", default=DEFAULT_BENCHMARK, help="the v2 policy file for --vs benchmark")
+    p.add_argument("--vs", default=SHIPPED_POLICY, help="the opponent's policy file (default: the shipped AI)")
     p.add_argument("--deals", type=int, default=256, help="duplicate deal pairs (rounds) on 4-player Tractor")
     p.add_argument("--matches", type=int, default=0, help="also this many duplicate pairs of full matches")
     p.add_argument("--variety", type=int, default=0, help="also this many single rounds on other tables")
@@ -267,16 +303,17 @@ def main(argv: list[str] | None = None) -> dict:
     net = load_policy(a.policy, device=a.device)
     s: dict = {}
     lines = []
+    vs = os.path.relpath(a.vs, REPO)
     if a.deals > 0:
-        s["duplicate"] = summarize_duplicate(play_duplicate(net, a.deals, a.vs, a.benchmark, a.procs, seed=a.seed, device=a.device))
-        lines.append(format_duplicate(s["duplicate"], a.vs))
+        s["duplicate"] = summarize_duplicate(play_duplicate(net, a.deals, a.vs, a.procs, seed=a.seed, device=a.device))
+        lines.append(format_duplicate(s["duplicate"], vs))
     if a.matches > 0:
-        s["matches"] = summarize_duplicate_matches(play_duplicate(net, a.matches, a.vs, a.benchmark, a.procs,
+        s["matches"] = summarize_duplicate_matches(play_duplicate(net, a.matches, a.vs, a.procs,
                                                                   seed=a.seed + 1, device=a.device, matches=True))
-        lines.append(format_duplicate_matches(s["matches"], a.vs))
+        lines.append(format_duplicate_matches(s["matches"], vs))
     if a.variety > 0:
-        s["variety"] = summarize_rounds(play_variety(net, a.variety, a.vs, a.benchmark, device=a.device))
-        lines.append(format_rounds(s["variety"], a.vs))
+        s["variety"] = summarize_rounds(play_variety(net, a.variety, a.vs, device=a.device))
+        lines.append(format_rounds(s["variety"], vs))
     print(json.dumps(s) if a.json else "\n".join(lines))
     return s
 

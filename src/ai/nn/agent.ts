@@ -1,14 +1,13 @@
 // Tractor learned agent — turns "score these candidates" into one reducer
 // action. The exchange is several decisions (each buried card, each friend
 // call); the draft between them stays local to this loop, so the game state
-// only changes once the whole exchange is chosen. Also the teacher side of
-// distillation: which candidate a given action is (the imitation target).
+// only changes once the whole exchange is chosen.
 
 import { RANKS, SUITS } from '@/game/cards';
 import type { TractorState, Action, FriendCall } from '@/game/types';
 import { friendCallProblems, validBidsFor } from '@/game/engine';
 import { observe } from '../observation';
-import { applyDraft, emptyDraft, nextStep, sameCards, type Decision, type Draft } from './decision';
+import { applyDraft, emptyDraft, nextStep, type Decision } from './decision';
 import { encodeObservation } from './encode';
 import type { TractorPolicyNet } from './runtime';
 
@@ -90,32 +89,4 @@ export function argmax(xs: ArrayLike<number>): number {
 
 export function netPolicy(net: TractorPolicyNet): CandidatePolicy {
   return (obs, d) => argmax(net.logits(obs, d.candidates.map((c) => c.features)));
-}
-
-/**
- * The candidate that `teacher`'s action is for this decision, or −1 when it
- * isn't among the candidates. `teacher` is its action for the undrafted
- * position (computed once per exchange).
- */
-export function teacherIndex(d: Decision, draft: Draft, teacher: Action | null): number {
-  if (d.kind === 'bid') {
-    if (!teacher || (teacher.type !== 'bid')) return 0; // no bid / pass
-    return d.candidates.findIndex((c) => 'action' in c.pick && c.pick.action.type === 'bid' && c.pick.action.card === teacher.card && c.pick.action.count === teacher.count);
-  }
-  if (d.kind === 'play') {
-    if (teacher?.type !== 'play') return -1;
-    return d.candidates.findIndex((c) => 'action' in c.pick && c.pick.action.type === 'play' && sameCards(c.pick.action.cards, teacher.cards));
-  }
-  if (teacher?.type !== 'exchange') return -1;
-  if (d.kind === 'bury') {
-    const left = teacher.bury.slice();
-    for (const b of draft.buried) {
-      const at = left.indexOf(b);
-      if (at >= 0) left.splice(at, 1);
-    }
-    return d.candidates.findIndex((c) => 'bury' in c.pick && left.includes(c.pick.bury));
-  }
-  const want = teacher.friends[draft.calls.length];
-  if (!want) return -1;
-  return d.candidates.findIndex((c) => 'call' in c.pick && c.pick.call.card === want.card && c.pick.call.ordinal === want.ordinal);
 }

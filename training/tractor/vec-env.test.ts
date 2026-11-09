@@ -1,26 +1,15 @@
 // @vitest-environment node
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CAND_DIM } from '@/ai/nn/decision';
 import { GLOBAL_DIM, GLOBAL_LAYOUT, MAX_SEATS, SEAT_DIM } from '@/ai/nn/encode';
 import { TractorPolicyNet } from '@/ai/nn/runtime';
 import { randomPolicyFile } from '@/ai/nn/testSupport';
-import { randomLegacyPolicyFile } from './legacy/v2/testSupport';
 import { PRIV_GLOBAL_DIM, PRIV_SEAT_DIM } from './privileged';
 import { TractorVecEnv, lineupRoles, mulberry32, type Episode, type VecBatch } from './vec-env';
 import { DEFAULT_SCENARIO, sampleScenario } from './scenario';
 
-const benchPath = (() => {
-  const dir = mkdtempSync(join(tmpdir(), 'tractor-bench-'));
-  const p = join(dir, 'v2.json');
-  writeFileSync(p, JSON.stringify(randomLegacyPolicyFile(3)));
-  return p;
-})();
-
-function randomChoices(b: VecBatch, rnd: () => number, teacher = false): number[] {
-  return Array.from(b.count, (k, i) => (teacher && b.teacher[i]! >= 0 ? b.teacher[i]! : Math.floor(rnd() * Math.max(1, k))));
+function randomChoices(b: VecBatch, rnd: () => number): number[] {
+  return Array.from(b.count, (k) => Math.floor(rnd() * Math.max(1, k)));
 }
 
 function checkBatch(b: VecBatch, privileged = false): void {
@@ -53,24 +42,18 @@ function checkBatch(b: VecBatch, privileged = false): void {
   for (let k = 0; k < seatRows; k++) expect(b.seats[k * SEAT_DIM]).toBe(1); // present
 }
 
-function run(env: TractorVecEnv, episodes: number, opts: { teacher?: boolean; maxSteps?: number; privileged?: boolean } = {}) {
+function run(env: TractorVecEnv, episodes: number, opts: { maxSteps?: number; privileged?: boolean } = {}) {
   const rnd = mulberry32(5);
   let b = env.reset();
   checkBatch(b, opts.privileged);
   const eps: Episode[] = [];
-  let labelled = 0;
-  let learnerRows = 0;
+  const rows = [0, 0]; // learner, opponent
   // Every reward paid to each env's seats since its episode began.
   const paid = Array.from({ length: b.seat.length }, () => new Array<number>(MAX_SEATS).fill(0));
   const totals: Array<{ ep: Episode; total: number[] }> = [];
   for (let t = 0; t < (opts.maxSteps ?? 50_000) && eps.length < episodes; t++) {
-    for (let i = 0; i < b.role.length; i++) {
-      if (b.role[i] === 0) {
-        learnerRows++;
-        if (b.teacher[i]! >= 0) labelled++;
-      }
-    }
-    b = env.step(randomChoices(b, rnd, opts.teacher));
+    for (let i = 0; i < b.role.length; i++) if (b.role[i]! >= 0) rows[b.role[i]!]!++;
+    b = env.step(randomChoices(b, rnd));
     checkBatch(b, opts.privileged);
     for (let i = 0; i < b.done.length; i++) {
       for (let s = 0; s < MAX_SEATS; s++) paid[i]![s]! += b.reward[i * MAX_SEATS + s]!;
@@ -81,7 +64,7 @@ function run(env: TractorVecEnv, episodes: number, opts: { teacher?: boolean; ma
     }
     eps.push(...b.episodes);
   }
-  return { eps, labelled, learnerRows, totals };
+  return { eps, rows, totals };
 }
 
 describe('scenario sampler', () => {
@@ -123,10 +106,10 @@ describe('scenario sampler', () => {
 
   it('seats lineups as asked', () => {
     const rnd = mulberry32(2);
-    expect(lineupRoles(rnd, 6, { weight: 1, learner: 'all', others: 'benchmark' })).toEqual(Array(6).fill('learner'));
-    const one = lineupRoles(rnd, 5, { weight: 1, learner: 'one', others: 'opponent' });
+    expect(lineupRoles(rnd, 6, { weight: 1, learner: 'all' })).toEqual(Array(6).fill('learner'));
+    const one = lineupRoles(rnd, 5, { weight: 1, learner: 'one' });
     expect(one.filter((r) => r === 'learner').length).toBe(1);
-    const team = lineupRoles(rnd, 6, { weight: 1, learner: 'team', others: 'benchmark' });
+    const team = lineupRoles(rnd, 6, { weight: 1, learner: 'team' });
     expect(team.filter((r) => r === 'learner').length).toBe(3);
     const at = team.indexOf('learner');
     expect(team[(at + 2) % 6]).toBe('learner');
@@ -134,9 +117,11 @@ describe('scenario sampler', () => {
 });
 
 describe('TractorVecEnv', () => {
-  it('plays rounds to the end with random choices, against the benchmark', () => {
-    const env = new TractorVecEnv({ benchmarkPolicy: benchPath, numEnvs: 6, seed: 3, lineups: [{ weight: 1, learner: 'team', others: 'benchmark' }], scenario: { focus: 0.5 } });
-    const { eps } = run(env, 24);
+  it('plays rounds to the end with random choices, asking learner and opponent seats', () => {
+    const env = new TractorVecEnv({ numEnvs: 6, seed: 3, lineups: [{ weight: 1, learner: 'team' }], scenario: { focus: 0.5 } });
+    const { eps, rows } = run(env, 24);
+    expect(rows[0]).toBeGreaterThan(0);
+    expect(rows[1]).toBeGreaterThan(0);
     expect(eps.length).toBeGreaterThanOrEqual(24);
     for (const e of eps) {
       expect(e.aborted).toBe(false);
@@ -151,31 +136,16 @@ describe('TractorVecEnv', () => {
   }, 120_000);
 
   it('pays point shaping that sums to zero over each round', () => {
-    const env = new TractorVecEnv({ benchmarkPolicy: benchPath, numEnvs: 4, seed: 8, pointsShaping: 0.5, lineups: [{ weight: 1, learner: 'all', others: 'benchmark' }] });
+    const env = new TractorVecEnv({ numEnvs: 4, seed: 8, pointsShaping: 0.5, lineups: [{ weight: 1, learner: 'all' }] });
     const { totals } = run(env, 12);
     expect(totals.length).toBeGreaterThanOrEqual(12);
     for (const { ep, total } of totals) total.forEach((x, s) => expect(x).toBeCloseTo(ep.reward[s]!, 4));
   }, 120_000);
 
-  it('labels learner decisions with the benchmark network’s choice', () => {
+  it('pairs duplicate deals with the teams swapped', () => {
     const env = new TractorVecEnv({
-      benchmarkPolicy: benchPath, numEnvs: 4, seed: 11, teacher: true,
-      lineups: [{ weight: 1, learner: 'all', others: 'benchmark' }], scenario: { focus: 1 },
-    });
-    const { labelled, learnerRows, eps } = run(env, 6, { teacher: true });
-    expect(eps.length).toBeGreaterThanOrEqual(6);
-    expect(labelled / learnerRows).toBeGreaterThan(0.9);
-  }, 120_000);
-
-  it('needs the benchmark policy for benchmark seats and for the teacher', () => {
-    expect(() => new TractorVecEnv({ lineups: [{ weight: 1, learner: 'team', others: 'benchmark' }] })).toThrow(/benchmarkPolicy/);
-    expect(() => new TractorVecEnv({ teacher: true })).toThrow(/benchmarkPolicy/);
-  });
-
-  it('plays benchmark seats, and pairs duplicate deals with the teams swapped', () => {
-    const env = new TractorVecEnv({
-      benchmarkPolicy: benchPath, numEnvs: 2, seed: 4, quota: 4, duplicate: true,
-      lineups: [{ weight: 1, learner: 'team', others: 'benchmark' }], scenario: { focus: 1 },
+      numEnvs: 2, seed: 4, quota: 4, duplicate: true,
+      lineups: [{ weight: 1, learner: 'team' }], scenario: { focus: 1 },
     });
     const { eps } = run(env, 100);
     expect(eps.length).toBe(8);
@@ -185,14 +155,14 @@ describe('TractorVecEnv', () => {
         const [a, b] = [mine[k]!, mine[k + 1]!];
         expect([a.pair, a.flip, b.pair, b.flip]).toEqual([b.pair, 0, a.pair, 1]);
         expect(a.seed).toBe(b.seed);
-        expect(a.roles.includes('benchmark')).toBe(true);
+        expect(a.roles.includes('opponent')).toBe(true);
         expect(b.roles).toEqual(a.roles.map((_, s) => a.roles[(s + 3) % 4]));
       }
     }
   }, 120_000);
 
   it('sends privileged features that agree with the observation', () => {
-    const env = new TractorVecEnv({ benchmarkPolicy: benchPath, numEnvs: 4, seed: 6, privileged: true, lineups: [{ weight: 1, learner: 'all', others: 'benchmark' }], scenario: { focus: 1 } });
+    const env = new TractorVecEnv({ numEnvs: 4, seed: 6, privileged: true, lineups: [{ weight: 1, learner: 'all' }], scenario: { focus: 1 } });
     let b = env.reset();
     const rnd = mulberry32(3);
     const hand = GLOBAL_LAYOUT.segments.find((s) => s.name === 'hand')!.offset;
@@ -217,10 +187,10 @@ describe('TractorVecEnv', () => {
     expect(checked).toBeGreaterThan(100);
   }, 120_000);
 
-  it('runs opponent seats and turn bidding, then idles on quota', () => {
+  it('runs turn bidding, then idles on quota', () => {
     const env = new TractorVecEnv({
-      benchmarkPolicy: benchPath, numEnvs: 3, seed: 7, quota: 2,
-      lineups: [{ weight: 1, learner: 'one', others: 'opponent' }],
+      numEnvs: 3, seed: 7, quota: 2,
+      lineups: [{ weight: 1, learner: 'one' }],
       scenario: { turnBidding: 1, focus: 0.5 },
     });
     const { eps } = run(env, 100, { maxSteps: 20_000 });
@@ -230,8 +200,8 @@ describe('TractorVecEnv', () => {
 
   it('plays whole matches from 2 in match mode', () => {
     const env = new TractorVecEnv({
-      benchmarkPolicy: benchPath, numEnvs: 2, seed: 5, quota: 1, matches: true,
-      lineups: [{ weight: 1, learner: 'team', others: 'benchmark' }], scenario: { focus: 1 },
+      numEnvs: 2, seed: 5, quota: 1, matches: true,
+      lineups: [{ weight: 1, learner: 'team' }], scenario: { focus: 1 },
     });
     const { eps } = run(env, 2, { maxSteps: 200_000 });
     expect(eps.length).toBe(2);
@@ -246,8 +216,27 @@ describe('TractorVecEnv', () => {
     }
   }, 120_000);
 
+  it('measures each seat’s skills at the end of a round', () => {
+    const env = new TractorVecEnv({ numEnvs: 4, seed: 13, lineups: [{ weight: 1, learner: 'all' }], scenario: { focus: 1 } });
+    const { eps } = run(env, 8);
+    expect(eps.length).toBeGreaterThanOrEqual(8);
+    for (const e of eps) {
+      const k = e.skills;
+      const side = (s: number) => (e.landlordTeam.includes(s) ? 'D' : 'A');
+      for (let s = 0; s < e.players; s++) {
+        expect(k.throwFails[s]).toBeLessThanOrEqual(k.throws[s]!);
+        expect(k.kittyBuried[s]! > 0 ? s === e.landlord : true).toBe(true);
+      }
+      // One side won the last trick: same value across a side, the other side the opposite.
+      const bySide = new Map<string, Set<number>>();
+      k.lastTrick.forEach((x, s) => bySide.set(side(s), (bySide.get(side(s)) ?? new Set()).add(x)));
+      for (const v of bySide.values()) expect(v.size).toBe(1);
+      expect(new Set([...bySide.values()].map((v) => [...v][0])).size).toBe(bySide.size);
+    }
+  }, 120_000);
+
   it('reports the TypeScript network’s logits for every pending decision', () => {
-    const env = new TractorVecEnv({ benchmarkPolicy: benchPath, numEnvs: 3, seed: 9 });
+    const env = new TractorVecEnv({ numEnvs: 3, seed: 9 });
     const b = env.reset();
     const logits = env.policyLogits(new TractorPolicyNet(randomPolicyFile(3)));
     expect(logits.map((l) => l.length)).toEqual(Array.from(b.count));

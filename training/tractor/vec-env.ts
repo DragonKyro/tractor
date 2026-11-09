@@ -2,17 +2,15 @@
 //
 // Every episode is one round of a match, set up by the curriculum
 // (scenario.ts: table size, mode, decks, levels, landlord), so a network meets
-// every rank situation without playing a match up from 2. Every seat has a
-// role:
+// every rank situation without playing a match up from 2. Every seat is played
+// by a network in the learner process, in one of two roles:
 //   learner    the network being trained
-//   opponent   a frozen network the learner process also runs (a past snapshot)
-//   benchmark  a frozen v2 network (`benchmarkPolicy`), played right here by the
-//              TypeScript runtime of the encoder it was trained on (legacy/v2)
+//   opponent   a frozen network (a past snapshot, or the anchor)
 // Which seats are which comes from a weighted list of lineups, sampled per
 // episode.
 //
-// Each env runs on its own — env-played seats, the deal — until a network seat
-// has a decision, then reports that seat's encoded observation and its
+// Each env runs on its own — the deal, steps with nothing to choose — until a
+// seat has a decision, then reports that seat's encoded observation and its
 // candidate list; the learner process answers every env with one candidate
 // index. Decisions:
 //
@@ -53,16 +51,9 @@
 // starts with everyone at 2 and plays round after round (rewards still paid
 // per round) until someone passes the final rank, or `maxRounds`.
 //
-// With `teacher` on, every learner row also carries the candidate the teacher
-// would pick (−1 where its move isn't among the candidates): the benchmark
-// network, the distillation target for the trainer's warm start.
-//
-// Fault tolerance: an env-played move the engine rejects is replaced by a
-// random legal move (`Episode.fallbacks`); any other error abandons just that
-// round (`Episode.aborted`, no reward) and starts a new one. Both go to
-// stderr, throttled.
+// Fault tolerance: an error abandons just that round (`Episode.aborted`, no
+// reward) and starts a new one; it goes to stderr, throttled.
 
-import { readFileSync } from 'node:fs';
 import type { Level } from '@/game/cards';
 import { defaultConfig } from '@/game/config';
 import { activeSeat, applyAction, attackerPointsSoFar, createMatchAt, validBidsFor } from '@/game/engine';
@@ -70,31 +61,27 @@ import type { Trump } from '@/game/trump';
 import type { Action, TractorState } from '@/game/types';
 import { observe, type Observation } from '@/ai/observation';
 import { aiSeats } from '@/ai/simulate';
-import { actWithPolicy, repairExchange, teacherIndex } from '@/ai/nn/agent';
+import { repairExchange } from '@/ai/nn/agent';
 import { CAND_DIM, MAX_CANDIDATES, applyDraft, emptyDraft, nextStep, type Decision, type DecisionKind, type Draft } from '@/ai/nn/decision';
 import { GLOBAL_DIM, MAX_SEATS, OBS_DIM, SEAT_DIM, encodeObservation, threshold } from '@/ai/nn/encode';
 import type { TractorPolicyNet } from '@/ai/nn/runtime';
-import { actWithPolicy as legacyAct, netPolicy as legacyPolicy, type BidMemo } from './legacy/v2/agent';
-import { TractorPolicyNet as LegacyNet, type TractorPolicyFile as LegacyFile } from './legacy/v2/runtime';
 import { PRIV_GLOBAL_DIM, PRIV_SEAT_DIM, encodePrivileged } from './privileged';
+import { skillStats, type Skill } from './skills';
 import { DEFAULT_REWARD, roundRewards, sideGain, type RewardWeights } from './reward';
 import { DEFAULT_SCENARIO, sampleScenario, type Scenario, type ScenarioWeights } from './scenario';
 
-export type SeatRole = 'learner' | 'opponent' | 'benchmark';
-const NETWORK_ROLE: Partial<Record<SeatRole, number>> = { learner: 0, opponent: 1 };
+export type SeatRole = 'learner' | 'opponent';
+const ROLE_CODE: Record<SeatRole, number> = { learner: 0, opponent: 1 };
 export const KIND_CODE: Record<DecisionKind, number> = { bid: 0, bury: 1, call: 2, play: 3 };
 
 /**
- * Who sits where, for one episode:
- *   learner  'all' every seat · 'one' a random seat · 'team' every other seat
- *            from a random start (in Tractor that is one fixed-partner team)
- *   others   the remaining seats: past snapshots (`opponent`, played by the
- *            learner process) or the v2 `benchmark` (played here)
+ * Which seats are the learner, for one episode (the rest are `opponent`):
+ * 'all' every seat · 'one' a random seat · 'team' every other seat from a
+ * random start (in Tractor that is one fixed-partner team).
  */
 export interface Lineup {
   weight: number;
   learner: 'all' | 'one' | 'team';
-  others: 'opponent' | 'benchmark';
 }
 
 export interface VecEnvOptions {
@@ -106,10 +93,6 @@ export interface VecEnvOptions {
   reward: RewardWeights;
   /** Episodes each env plays before going idle (0 = forever). */
   quota: number;
-  /** Label learner rows with the benchmark network's choice (`VecBatch.teacher`). */
-  teacher: boolean;
-  /** A v2 policy file for 'benchmark' seats and the teacher. */
-  benchmarkPolicy: string | null;
   /** Rows also carry the critic's privileged features. */
   privileged: boolean;
   /** Potential-based shaping weight on the attackers' points (0 = off). */
@@ -127,12 +110,10 @@ export interface VecEnvOptions {
 export const DEFAULT_VEC_ENV_OPTIONS: VecEnvOptions = {
   numEnvs: 16,
   seed: 1,
-  lineups: [{ weight: 1, learner: 'all', others: 'opponent' }],
+  lineups: [{ weight: 1, learner: 'all' }],
   scenario: {},
   reward: DEFAULT_REWARD,
   quota: 0,
-  teacher: false,
-  benchmarkPolicy: null,
   privileged: false,
   pointsShaping: 0,
   duplicate: false,
@@ -155,7 +136,7 @@ export interface Episode {
   /** A focus-table round (4-player Tractor) rather than the variety mix. */
   focus: boolean;
   landlordLevel: string;
-  /** The lineup it was played with, 'learner/others' (e.g. 'team/benchmark'). */
+  /** Its lineup's `learner` ('all' | 'one' | 'team'). */
   lineup: string;
   roles: SeatRole[];
   landlord: number | null;
@@ -169,7 +150,6 @@ export interface Episode {
   /** Network decisions per seat (single-candidate ones excluded: the env plays those itself, `autoplays`). */
   decisions: number[];
   steps: number;
-  fallbacks: number;
   autoplays: number;
   truncated: boolean;
   aborted: boolean;
@@ -178,6 +158,8 @@ export interface Episode {
   /** Each seat's level at the end, and who passed the final rank (the match winners). */
   finalLevels: string[];
   winners: number[];
+  /** Per-seat skill measures of the (last) round (skills.ts). */
+  skills: Record<Skill, number[]>;
 }
 
 /** Buffers are reused by the next reset / step — copy anything you keep. */
@@ -207,8 +189,6 @@ export interface VecBatch {
   /** sum(count) × CAND_DIM, rows in env order (a view; see `candRows`). */
   cand: Float32Array;
   candRows: number;
-  /** The teacher's candidate for learner row i, or −1 (always −1 unless `teacher` is on). */
-  teacher: Int16Array;
   /** numEnvs × MAX_SEATS. */
   reward: Float32Array;
   done: Uint8Array;
@@ -220,8 +200,6 @@ interface Pending {
   obs0: Observation;
   draft: Draft;
   decision: Decision;
-  /** The teacher's action for the undrafted position, computed once per exchange. */
-  teacherAction?: Action | null;
 }
 
 interface EnvSlot {
@@ -233,18 +211,14 @@ interface EnvSlot {
   scenario: Scenario;
   lineup: string;
   roles: SeatRole[];
-  rng: () => number;
   steps: number;
   /** Steps in the current round (`maxSteps` is per round). */
   roundSteps: number;
   rounds: number;
   decisions: number[];
-  fallbacks: number;
   autoplays: number;
-  /** Live deal: the legal-bid set each network seat was last asked about. */
+  /** Live deal: the legal-bid set each seat was last asked about. */
   bidKey: string[];
-  /** Benchmark seats' live-deal declines (their own training's rule, see BidMemo). */
-  benchMemo: BidMemo;
   /** Shaping: each seat's current potential, and the round's threshold. */
   phi: number[];
   thr: number;
@@ -280,19 +254,16 @@ export function lineupRoles(rnd: () => number, n: number, lineup: Lineup): SeatR
   const start = Math.floor(rnd() * n);
   for (let s = 0; s < n; s++) {
     const learner = lineup.learner === 'all' || (lineup.learner === 'one' ? s === start : (s - start + n) % 2 === 0);
-    roles.push(learner ? 'learner' : lineup.others);
+    roles.push(learner ? 'learner' : 'opponent');
   }
   return roles;
 }
-
-const OTHERS = ['opponent', 'benchmark'];
 
 function validateLineups(lineups: Lineup[]): void {
   if (!Array.isArray(lineups) || lineups.length === 0) throw new Error('lineups must be a non-empty list');
   for (const l of lineups) {
     if (!(l.weight >= 0)) throw new Error(`lineup weight ${l.weight}`);
     if (!['all', 'one', 'team'].includes(l.learner)) throw new Error(`lineup learner ${JSON.stringify(l.learner)}`);
-    if (!OTHERS.includes(l.others)) throw new Error(`lineup others ${JSON.stringify(l.others)}`);
   }
   if (!lineups.some((l) => l.weight > 0)) throw new Error('every lineup has weight 0');
 }
@@ -318,16 +289,12 @@ export class TractorVecEnv {
   private readonly seatBuf: Float32Array;
   private readonly slotBuf: Int8Array;
   private readonly privSeatBuf: Float32Array;
-  private readonly bench: LegacyNet | null;
 
   constructor(options: Partial<VecEnvOptions> = {}) {
     this.opts = { ...DEFAULT_VEC_ENV_OPTIONS, ...options };
     const n = this.opts.numEnvs;
     if (!(Number.isInteger(n) && n >= 1)) throw new Error('numEnvs must be a positive integer');
     validateLineups(this.opts.lineups);
-    const p = this.opts.benchmarkPolicy;
-    this.bench = p ? new LegacyNet(JSON.parse(readFileSync(p, 'utf8')) as LegacyFile) : null;
-    this.checkBenchmarkNeeds();
     this.candBuf = new Float32Array(n * MAX_CANDIDATES * CAND_DIM);
     this.seatBuf = new Float32Array(n * MAX_SEATS * SEAT_DIM);
     this.slotBuf = new Int8Array(n * MAX_SEATS);
@@ -348,27 +315,19 @@ export class TractorVecEnv {
       count: new Int16Array(n),
       cand: this.candBuf.subarray(0, 0),
       candRows: 0,
-      teacher: new Int16Array(n),
       reward: new Float32Array(n * MAX_SEATS),
       done: new Uint8Array(n),
       episodes: [],
     };
   }
 
-  private checkBenchmarkNeeds(): void {
-    const needs = this.opts.lineups.some((l) => l.weight > 0 && l.others === 'benchmark') || this.opts.teacher;
-    if (needs && !this.bench) throw new Error('benchmark seats / teacher need "benchmarkPolicy"');
-  }
-
-  /** New lineups / curriculum for episodes that start from now on; teacher labels on or off. */
-  configure(update: { lineups?: Lineup[]; scenario?: Partial<ScenarioWeights>; teacher?: boolean }): void {
+  /** New lineups / curriculum for episodes that start from now on. */
+  configure(update: { lineups?: Lineup[]; scenario?: Partial<ScenarioWeights> }): void {
     if (update.lineups) {
       validateLineups(update.lineups);
       this.opts.lineups = update.lineups.map((l) => ({ ...l }));
     }
     if (update.scenario) this.opts.scenario = { ...update.scenario };
-    if (update.teacher !== undefined) this.opts.teacher = update.teacher;
-    this.checkBenchmarkNeeds();
   }
 
   reset(): VecBatch {
@@ -455,17 +414,14 @@ export class TractorVecEnv {
           pair,
           flip,
           scenario,
-          lineup: `${lineup.learner}/${lineup.others}`,
+          lineup: lineup.learner,
           roles,
-          rng: mulberry32((seed ^ 0x85ebca6b) + flip),
           steps: 0,
           roundSteps: 0,
           rounds: 1,
           decisions: new Array<number>(n).fill(0),
-          fallbacks: 0,
           autoplays: 0,
           bidKey: new Array<string>(n).fill(''),
-          benchMemo: new Map(),
           phi: new Array<number>(n).fill(0),
           thr: roundThreshold(state),
           pending: null,
@@ -533,13 +489,13 @@ export class TractorVecEnv {
       gain: s.seats.map((_, k) => (result && !how.aborted ? sideGain(s, k) : 0)),
       decisions: env.decisions.slice(),
       steps: env.steps,
-      fallbacks: env.fallbacks,
       autoplays: env.autoplays,
       truncated: how.truncated,
       aborted: how.aborted,
       rounds: env.rounds,
       finalLevels: s.levels.map(String),
       winners: result && !how.aborted ? result.winners.slice() : [],
+      skills: skillStats(s),
     });
   }
 
@@ -564,27 +520,6 @@ export class TractorVecEnv {
       this.batch.reward[i * MAX_SEATS + k]! += phi - env.phi[k]!;
       env.phi[k] = phi;
     }
-  }
-
-  /** A benchmark seat's move, or null when it has none (declining to bid). */
-  private envMove(i: number, seat: number): Action | null {
-    const env = this.envs[i]!;
-    return legacyAct(env.state, seat, legacyPolicy(this.bench!), env.benchMemo);
-  }
-
-  /** An env-played seat's move; one the engine rejects is replaced by a random legal move. */
-  private envPlay(i: number, seat: number, action: Action): void {
-    const env = this.envs[i]!;
-    try {
-      this.apply(i, action);
-      return;
-    } catch (e) {
-      report(`${env.roles[seat]} ${action.type} rejected`, `${(e as Error).message} — ${JSON.stringify(action)}`);
-    }
-    env.fallbacks++;
-    const fallback = actWithPolicy(env.state, seat, (_obs, d) => Math.floor(env.rng() * d.candidates.length));
-    if (!fallback) throw new Error(`no fallback move for seat ${seat} at ${env.state.round.stage}`);
-    this.apply(i, fallback);
   }
 
   /** A step with nothing to choose; a finished exchange gets legal friend calls if its own break a rule. */
@@ -627,12 +562,11 @@ export class TractorVecEnv {
     return true;
   }
 
-  /** Live deal: ask the first network seat whose legal bids changed since it was last asked. */
+  /** Live deal: ask the first seat whose legal bids changed since it was last asked. */
   private askBid(i: number): boolean {
     const env = this.envs[i]!;
     const s = env.state;
     for (let seat = 0; seat < s.seats.length; seat++) {
-      if (NETWORK_ROLE[env.roles[seat]!] === undefined) continue;
       const key = bidKeyOf(s, seat);
       if (key === env.bidKey[seat]) continue;
       env.bidKey[seat] = key;
@@ -646,22 +580,7 @@ export class TractorVecEnv {
     return false;
   }
 
-  /** Live deal: the first env-played seat that wants to bid now does. */
-  private envBid(i: number): boolean {
-    const env = this.envs[i]!;
-    const s = env.state;
-    for (let seat = 0; seat < s.seats.length; seat++) {
-      if (NETWORK_ROLE[env.roles[seat]!] !== undefined || validBidsFor(s, seat).length === 0) continue;
-      const a = this.envMove(i, seat);
-      if (a?.type === 'bid') {
-        this.envPlay(i, seat, a);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Run env i forward to the next network decision, resetting finished rounds. */
+  /** Run env i forward to the next decision, resetting finished rounds. */
   private advance(i: number): void {
     for (;;) {
       const env = this.envs[i]!;
@@ -676,7 +595,6 @@ export class TractorVecEnv {
         env.rounds++;
         env.roundSteps = 0;
         env.bidKey.fill('');
-        env.benchMemo.clear();
         env.thr = roundThreshold(env.state);
         continue;
       }
@@ -694,7 +612,6 @@ export class TractorVecEnv {
       const r = s.round;
       if (r.stage === 'draw') {
         if (this.askBid(i)) return;
-        if (this.envBid(i)) continue;
         if (r.deck.length > 0) {
           this.apply(i, { type: 'draw', seat: r.dealTo });
           continue;
@@ -702,15 +619,9 @@ export class TractorVecEnv {
       }
       const seat = activeSeat(s);
       if (seat === null) throw new Error(`nobody to act at ${r.stage}`);
-      if (NETWORK_ROLE[env.roles[seat]!] === undefined) {
-        const a = this.envMove(i, seat);
-        if (!a) throw new Error(`${env.roles[seat]} seat ${seat} has no move at ${r.stage}`);
-        this.envPlay(i, seat, a);
-        continue;
-      }
       const obs0 = observe(s, seat);
       const st = nextStep(obs0);
-      if (!st) throw new Error(`network seat ${seat} has nothing to do at ${r.stage}`);
+      if (!st) throw new Error(`seat ${seat} has nothing to do at ${r.stage}`);
       if ('forced' in st) {
         this.applyForced(i, st.forced);
         continue;
@@ -768,7 +679,6 @@ export class TractorVecEnv {
   private writeRow(i: number): void {
     const b = this.batch;
     const env = this.envs[i]!;
-    b.teacher[i] = -1;
     b.players[i] = env.state.seats.length;
     const p = env.pending;
     if (env.idle || !p) {
@@ -784,7 +694,7 @@ export class TractorVecEnv {
     const cands = p.decision.candidates;
     if (cands.length === 0 || cands.length > MAX_CANDIDATES) throw new Error(`${cands.length} candidates`);
     b.seat[i] = p.seat;
-    b.role[i] = NETWORK_ROLE[env.roles[p.seat]!]!;
+    b.role[i] = ROLE_CODE[env.roles[p.seat]!];
     b.kind[i] = KIND_CODE[p.decision.kind];
     b.count[i] = cands.length;
     encodeObservation(applyDraft(p.obs0, p.draft), env.obs);
@@ -792,10 +702,6 @@ export class TractorVecEnv {
     if (this.opts.privileged) {
       encodePrivileged(env.state, p.seat, env.privGlob, env.privSeats);
       b.privGlob.set(env.privGlob, i * PRIV_GLOBAL_DIM);
-    }
-    if (this.opts.teacher && env.roles[p.seat] === 'learner') {
-      if (p.teacherAction === undefined) p.teacherAction = legacyAct(env.state, p.seat, legacyPolicy(this.bench!));
-      b.teacher[i] = teacherIndex(p.decision, p.draft, p.teacherAction);
     }
   }
 }

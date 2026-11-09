@@ -7,24 +7,25 @@
 //   bid   declaring trump: "no bid" (live deal) or "pass" (turns), then every legal bid
 //   bury  the kitty, one card at a time (kittySize decisions)
 //   call  Finding Friends: one friend call at a time (card × which copy)
-//   play  a lead (single units, tuples, tractors, boss throws) or a follow:
+//   play  a lead (single units, tuples, tractors, boss throws and their
+//         variants: part of the boss units, or one near-boss card added) or a follow:
 //         the legal matchings of the required shape with every choice the
 //         rules leave open (any discard when void, any card of the suit when
-//         following a single, per-suit and pair-keeping fills; plays.ts `wide`)
+//         following a single, per-suit and pair-keeping fills; plays.ts)
 //
 // Steps with nothing to decide (taking the kitty, turning it over, redeal)
 // come back as `forced`. ACTION_SPACE_VERSION goes in every policy file.
 
 import { cardPoints, countCards, isJoker, removeCards, totalPoints, type Card, type Rank } from '@/game/cards';
-import { formatFromCards, matchFormat, type TrickUnit } from '@/game/format';
+import { formatFromCards, formatSize, matchFormat, unitCards, unitSize, type TrickUnit } from '@/game/format';
 import { effectiveSuit, type Trump } from '@/game/trump';
 import type { Action, FriendCall } from '@/game/types';
 import { knownVoids, unseenCounts, type Observation } from '../observation';
-import { followCandidates, leadCandidates, tractorReq, unitIsBoss, winnerIfPlayed } from '../plays';
+import { followCandidates, leadCandidates, leadUnits, tractorReq, unitIsBoss, unseenAbove, winnerIfPlayed } from '../plays';
 import { Layout, groupOf, knownSides, slotTrump, unitKinds } from './encode';
 import { CARD_SLOTS, GROUPS, sideSuits, slotOf } from './slots';
 
-export const ACTION_SPACE_VERSION = 2;
+export const ACTION_SPACE_VERSION = 3;
 export const MAX_CANDIDATES = 64;
 /** Follow candidates generated per decision. */
 export const FOLLOW_LIMIT = MAX_CANDIDATES;
@@ -66,6 +67,15 @@ const C = {
   pointsToThem: CAND.add('pointsToThem', 1),
   partnerVoidLed: CAND.add('partnerVoidLed', 1),
   opponentVoidLed: CAND.add('opponentVoidLed', 1),
+  // v4 (appended to v3's)
+  killRisk: CAND.add('killRisk', 1),
+  ruffRisk: CAND.add('ruffRisk', 1),
+  trumpsLeftAfter: CAND.add('trumpsLeftAfter', 1),
+  bossLeftAfter: CAND.add('bossLeftAfter', 1),
+  drawsTrump: CAND.add('drawsTrump', 1),
+  lastTrick: CAND.add('lastTrick', 1),
+  lastTrickMultiplier: CAND.add('lastTrickMultiplier', 1),
+  bossHeldBack: CAND.add('bossHeldBack', 1),
 };
 export const CAND_DIM = CAND.dim;
 export const CAND_LAYOUT = CAND;
@@ -256,11 +266,27 @@ function playCandidates(obs: Observation, trump: Trump, decks: number): Candidat
   const seat = obs.seat;
   const unseen = unseenCounts(obs);
   const leading = !trick.format;
-  const plays = leading ? leadCandidates(obs, unseen) : followCandidates(obs, trick.format!, FOLLOW_LIMIT, { wide: true });
+  const plays = leading ? leadCandidates(obs, unseen) : followCandidates(obs, trick.format!, FOLLOW_LIMIT);
   const sides = knownSides(obs);
   const mine = sides[seat]!;
   const voids = knownVoids(obs);
   const trickPoints = totalPoints(trick.plays.flatMap((p) => p.cards));
+  // v4: who is still to play, and what they're known to lack.
+  const after = leading ? trick.order.slice(1) : trick.order.slice(trick.plays.length + 1);
+  const oppsAfter = after.filter((s) => mine !== '?' && sides[s] !== '?' && sides[s] !== mine);
+  const allOpps = obs.landlord === null ? [] : [...Array(obs.numPlayers).keys()].filter((s) => s !== seat && mine !== '?' && sides[s] !== '?' && sides[s] !== mine);
+  // Computed once per decision: boss cards in hand, boss units per suit.
+  const bossCards = countCards(obs.hand.filter((c) => unseenAbove(realTrump, c, unseen) === 0));
+  const bossTotal = [...bossCards.values()].reduce((a, k) => a + k, 0);
+  const bossUnitsBySuit = new Map<string, number>();
+  if (leading) {
+    for (const u of leadUnits(obs)) {
+      if (!unitIsBoss(realTrump, u, unseen)) continue;
+      const su = effectiveSuit(realTrump, unitCards(u)[0]!);
+      bossUnitsBySuit.set(su, (bossUnitsBySuit.get(su) ?? 0) + 1);
+    }
+  }
+  const lastTrick = obs.hand.length > 0 && obs.hand.length <= (leading ? obs.hand.length : formatSize(trick.format!));
   const out: Candidate[] = [];
   for (const cards of plays.slice(0, MAX_CANDIDATES)) {
     const f = base(leading ? 'lead' : 'follow');
@@ -310,6 +336,46 @@ function playCandidates(obs: Observation, trump: Trump, decks: number): Candidat
         if (winner === seat || sides[winner] === mine) f[C.pointsToUs] = pts;
         else if (sides[winner] !== '?') f[C.pointsToThem] = pts;
       }
+    }
+    // v4: the risk of being beaten, what control the play leaves, and the final trick.
+    const units = leading ? (() => {
+      try {
+        return formatFromCards(realTrump, tractorReq(obs), cards).units;
+      } catch {
+        return [];
+      }
+    })() : (matchFormat(realTrump, trick.format!, cards)[0] ?? []);
+    const suit = effectiveSuit(realTrump, cards[0]!);
+    if (leading || f[C.winsNow]) {
+      let beaters = 0;
+      for (const u of units) {
+        // Unseen cards (with enough copies) above the unit's top card: who could kill it.
+        const uc = unitCards(u);
+        beaters = Math.max(beaters, unseenAbove(realTrump, uc[uc.length - 1]!, unseen, u.count));
+      }
+      f[C.killRisk] = Math.min(1, beaters / 4);
+      const against = leading ? allOpps : oppsAfter;
+      const ledSuit = leading ? suit : trick.format!.suit;
+      if (ledSuit !== 'T' && against.length) {
+        f[C.ruffRisk] = against.filter((s) => voids[s]!.has(ledSuit) && !voids[s]!.has('T')).length / against.length;
+      }
+    }
+    const left = removeCards(obs.hand, cards);
+    f[C.trumpsLeftAfter] = left.filter((c) => effectiveSuit(realTrump, c) === 'T').length / Math.max(1, obs.hand.length);
+    const used = countCards(cards);
+    let bossUsed = 0;
+    for (const [c, k] of used) bossUsed += Math.min(k, bossCards.get(c) ?? 0);
+    f[C.bossLeftAfter] = Math.min(1, (bossTotal - bossUsed) / 6);
+    if (leading && suit === 'T' && allOpps.length) f[C.drawsTrump] = allOpps.filter((s) => !voids[s]!.has('T')).length / allOpps.length;
+    if (lastTrick) {
+      f[C.lastTrick] = 1;
+      const largest = units.reduce((m, u) => Math.max(m, unitSize(u)), 0);
+      f[C.lastTrickMultiplier] = Math.min(1, (obs.config.kittyPenalty === 'power' ? 2 ** largest : 2 * largest) / 16);
+    }
+    if (leading) {
+      const bossInSuit = bossUnitsBySuit.get(suit) ?? 0;
+      const bossPlayed = units.filter((u) => unitIsBoss(realTrump, u, unseen)).length;
+      f[C.bossHeldBack] = Math.min(1, Math.max(0, bossInSuit - bossPlayed) / 4);
     }
     out.push({ pick: { action: { type: 'play', seat, cards } }, features: f });
   }

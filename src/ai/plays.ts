@@ -77,7 +77,23 @@ export function unitIsBoss(trump: Trump, unit: TrickUnit, unseen: Map<Card, numb
   return true;
 }
 
-/** Legal leads to consider: single units, and per suit a throw of all its boss units. */
+/** Unseen copies that beat `card` in its own suit (any one of them could take a single). */
+export function unseenAbove(trump: Trump, card: Card, unseen: Map<Card, number>, copies = 1): number {
+  const suit = effectiveSuit(trump, card);
+  let n = 0;
+  for (const [c, k] of unseen) {
+    if (k >= copies && effectiveSuit(trump, c) === suit && compareEffective(trump, c, card) > 0) n += k;
+  }
+  return n;
+}
+
+/**
+ * Legal leads to consider: single units, and per suit a throw of all its boss
+ * units, the throw without its smallest boss unit and with only its two
+ * largest (to keep control of the suit), and a riskier throw adding the
+ * suit's highest other single when at most two unseen cards beat it (it fails
+ * if an opponent holds one; the network weighs that from what it has seen).
+ */
 export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Card[][] {
   const trump = obs.trump!;
   const units = leadUnits(obs);
@@ -93,11 +109,11 @@ export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Car
     const s = effectiveSuit(trump, unitCards(u)[0]!);
     bySuitUnits.set(s, [...(bySuitUnits.get(s) ?? []), u]);
   }
-  for (const list of bySuitUnits.values()) {
+  const variants: Card[][] = [];
+  for (const [suit, list] of bySuitUnits) {
     list.sort((a, b) => unitCards(b).length - unitCards(a).length);
     let pool = obs.hand.slice();
-    const picked: Card[] = [];
-    let parts = 0;
+    const chosen: Card[][] = [];
     for (const u of list) {
       const cards = unitCards(u);
       try {
@@ -105,24 +121,31 @@ export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Car
       } catch {
         continue;
       }
-      picked.push(...cards);
-      parts++;
+      chosen.push(cards);
     }
-    if (parts >= 2) out.set(key(picked), picked);
+    const picked = chosen.flat();
+    if (chosen.length >= 2) out.set(key(picked), picked);
+    if (chosen.length >= 3) {
+      variants.push(chosen.slice(0, -1).flat());
+      variants.push(chosen.slice(0, 2).flat());
+    }
+    // Near-boss: add the suit's highest card that isn't already in the throw.
+    const rest = pool.filter((c) => effectiveSuit(trump, c) === suit).sort((a, b) => compareCards(trump, b, a));
+    const top = rest[0];
+    if (top && chosen.length >= 1 && unseenAbove(trump, top, unseen) <= 2) variants.push([...picked, top]);
   }
+  for (const v of variants) if (!out.has(key(v))) out.set(key(v), v);
   return [...out.values()];
 }
 
 /**
  * Legal follows to `format`: several matchings of the required shapes, each
- * with low / high / point fills. With `wide` (the learned AI's action space)
- * also, wherever the rules leave a choice: every distinct card when one card
- * is free to choose (any discard when void, any card of the suit when
- * following a single), a cheapest fill taken from each suit first, and a fill
- * that keeps pairs. The narrow list always comes first and is unchanged, so
- * the frozen v2 benchmark (training/tractor/legacy/v2) sees exactly what it always did.
+ * with low / high / point fills; then, wherever the rules leave a choice,
+ * every distinct card when one card is free to choose (any discard when void,
+ * any card of the suit when following a single), a cheapest fill taken from
+ * each suit first, and a fill that keeps pairs. The first `limit`, in that order.
  */
-export function followCandidates(obs: Observation, format: TrickFormat, limit = 24, opts: { wide?: boolean } = {}): Card[][] {
+export function followCandidates(obs: Observation, format: TrickFormat, limit = 24): Card[][] {
   const trump = obs.trump!;
   const hand = obs.hand;
   const need = formatSize(format);
@@ -203,7 +226,7 @@ export function followCandidates(obs: Observation, format: TrickFormat, limit = 
   };
 
   generate(narrowFills);
-  if (opts.wide) generate(wideFills);
+  generate(wideFills);
   const legal = [...out.values()].filter((cards) => isLegalFollow(trump, format, hand, cards, obs.config.trickDrawPolicy));
   if (legal.length > 0) return legal.slice(0, limit);
   return [bruteForceFollow(obs, format, inSuit, others, need)];

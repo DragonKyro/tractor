@@ -5,10 +5,12 @@ and drives the vectorized env over stdin/stdout (JSON lines; batch replies add
 the feature arrays as raw bytes after the line). The rules, the hidden-
 information boundary, the encoder and the candidate lists all live in
 TypeScript (src/ai/nn/); this side only ever sees encoded observations,
-candidate features and rewards.
+candidate features and rewards. Every seat is played from this side: the
+learner's rows (role 0) and the opponent's (role 1), each a network the caller
+runs.
 
     with TractorEnv() as env:
-        batch = env.reset(num_envs=32, lineups=[lineup("team", "benchmark")], benchmark_policy="v2.json")
+        batch = env.reset(num_envs=32, lineups=[lineup("team")])
         while training:
             choices = policy(batch)            # one candidate index per env row
             batch = env.step(choices)
@@ -43,17 +45,14 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SCRIPT = os.path.normpath(os.path.join(HERE, "..", "dist", "tractor-env.mjs"))
-DEFAULT_BENCHMARK = os.path.normpath(os.path.join(HERE, "..", "benchmarks", "v2-update1500.json"))
 
 ROLE_LEARNER, ROLE_OPPONENT, ROLE_IDLE = 0, 1, -1
 KINDS = ("bid", "bury", "call", "play")
 
 
-def lineup(learner: str = "all", others: str = "opponent", weight: float = 1.0) -> dict:
-    """learner: 'all' | 'one' | 'team' (every other seat); others: the remaining
-    seats, 'opponent' (a past snapshot, played by the caller) or 'benchmark' (the
-    v2 network, played by the env)."""
-    return {"weight": weight, "learner": learner, "others": others}
+def lineup(learner: str = "all", weight: float = 1.0) -> dict:
+    """learner: 'all' | 'one' | 'team' (every other seat); the remaining seats are opponents."""
+    return {"weight": weight, "learner": learner}
 
 
 @dataclass
@@ -72,7 +71,6 @@ class Batch:
     count: np.ndarray  # (n,) int64 -- candidates per row
     offsets: np.ndarray  # (n,) int64 -- row i's first candidate in `cand`
     cand: np.ndarray  # (sum(count), cand_dim) float32
-    teacher: np.ndarray  # (n,) int64 -- the teacher's candidate for learner rows, -1 = none
     reward: np.ndarray  # (n, max_seats) float32 -- per-seat reward since the previous batch
     done: np.ndarray  # (n,) bool -- a round ended; row i is already the next round's first decision
     episodes: list  # summaries of the rounds that ended
@@ -164,7 +162,6 @@ class TractorEnv:
             count=count,
             offsets=starts(count),
             cand=np.frombuffer(r["raw"]["cand"], dtype="<f4").reshape(r["candRows"], self.cand_dim),
-            teacher=np.frombuffer(r["raw"]["teacher"], dtype="<i2").astype(np.int64),
             reward=np.asarray(r["reward"], dtype=np.float32).reshape(n, self.max_seats),
             done=np.asarray(r["done"], dtype=bool),
             episodes=r["episodes"],
@@ -178,8 +175,6 @@ class TractorEnv:
         scenario: dict | None = None,
         reward: dict | None = None,
         quota: int = 0,
-        teacher: bool = False,
-        benchmark_policy: str | None = None,
         privileged: bool = False,
         points_shaping: float = 0.0,
         duplicate: bool = False,
@@ -190,9 +185,7 @@ class TractorEnv:
         """lineups: who sits where, sampled per round (see `lineup`). scenario:
         curriculum weights over DEFAULT_SCENARIO (training/tractor/scenario.ts),
         e.g. {"focus": 1}. quota: rounds per env before it idles (0 = forever).
-        teacher: label learner rows with the benchmark network's candidate (the v2
-        network in benchmark_policy, which 'benchmark' seats also play). privileged: rows carry the critic's
-        features. points_shaping: potential-based shaping weight on the points.
+        privileged: rows carry the critic's features. points_shaping: potential-based shaping weight on the points.
         duplicate: rounds in pairs, the same deal with the teams swapped.
         matches: episodes are whole matches from 2 (up to max_rounds rounds), for evals."""
         options: dict = {
@@ -201,8 +194,6 @@ class TractorEnv:
             "lineups": lineups or [lineup()],
             "scenario": scenario or {},
             "quota": quota,
-            "teacher": teacher,
-            "benchmarkPolicy": os.path.abspath(benchmark_policy) if benchmark_policy else None,
             "privileged": privileged,
             "pointsShaping": points_shaping,
             "duplicate": duplicate,
@@ -224,16 +215,13 @@ class TractorEnv:
     def recv_batch(self) -> Batch:
         return self._batch(self._recv())
 
-    def configure(self, lineups: list[dict] | None = None, scenario: dict | None = None,
-                  teacher: bool | None = None) -> None:
-        """New lineups / curriculum for rounds that start from now on; teacher labels on / off."""
+    def configure(self, lineups: list[dict] | None = None, scenario: dict | None = None) -> None:
+        """New lineups / curriculum for rounds that start from now on."""
         options: dict = {}
         if lineups is not None:
             options["lineups"] = lineups
         if scenario is not None:
             options["scenario"] = scenario
-        if teacher is not None:
-            options["teacher"] = teacher
         self._call({"cmd": "configure", "options": options})
 
     def policy_logits(self, path: str) -> list[list[float]]:
@@ -267,8 +255,7 @@ def _smoke(args: argparse.Namespace) -> None:
     with TractorEnv() as env:
         print(f"obs {env.global_dim} + {env.max_seats} x {env.seat_dim}, cand {env.cand_dim} (max {env.max_candidates}), "
               f"encoder v{env.encoder_version}, action space v{env.action_space_version}")
-        batch = env.reset(num_envs=args.envs, seed=args.seed, lineups=[lineup(args.learner, args.others)],
-                          teacher=args.teacher, benchmark_policy=args.benchmark)
+        batch = env.reset(num_envs=args.envs, seed=args.seed, lineups=[lineup(args.learner)])
         episodes: list = []
         decisions = 0
         kinds: Counter = Counter()
@@ -280,18 +267,14 @@ def _smoke(args: argparse.Namespace) -> None:
             live = batch.role >= 0
             kinds.update(KINDS[k] for k in batch.kind[live])
             cands.extend(batch.count[live].tolist())
-            choice = random_choices(batch, rng)
-            if args.teacher:
-                choice = np.where(batch.teacher >= 0, batch.teacher, choice)
-            batch = env.step(choice)
+            batch = env.step(random_choices(batch, rng))
             decisions += int(live.sum())
             episodes.extend(batch.episodes)
         dt = time.perf_counter() - t0
     print(f"{len(episodes)} rounds, {decisions} network decisions in {dt:.1f}s ({decisions / dt:,.0f} decisions/s, "
           f"{len(episodes) / dt:,.1f} rounds/s)")
     print(f"decisions by kind {dict(kinds)}; candidates per decision mean {np.mean(cands):.1f}, max {max(cands)}")
-    print(f"aborted {sum(e['aborted'] for e in episodes)}, truncated {sum(e['truncated'] for e in episodes)}, "
-          f"fallbacks {sum(e['fallbacks'] for e in episodes)}")
+    print(f"aborted {sum(e['aborted'] for e in episodes)}, truncated {sum(e['truncated'] for e in episodes)}")
     print("tables", dict(sorted(Counter(f"{e['players']}p {e['mode'][:2]}" for e in episodes).items())))
     print("level classes", dict(Counter(e["levelClass"] for e in episodes)))
 
@@ -301,8 +284,5 @@ if __name__ == "__main__":
     p.add_argument("--envs", type=int, default=32)
     p.add_argument("--episodes", type=int, default=200)
     p.add_argument("--learner", default="team", choices=("all", "one", "team"))
-    p.add_argument("--others", default="benchmark", choices=("benchmark", "opponent"))
-    p.add_argument("--benchmark", default=DEFAULT_BENCHMARK, help="the v2 policy file")
-    p.add_argument("--teacher", action="store_true", help="play the benchmark's choice where it has one")
     p.add_argument("--seed", type=int, default=1)
     _smoke(p.parse_args())

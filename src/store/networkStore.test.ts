@@ -97,7 +97,7 @@ async function step(devices: Device[]): Promise<boolean> {
   if (seat === null) return false;
   const owner = devices.find((d) => d.uuid === s.seats[seat]!.id)!;
   const { chooseAIAction } = await import('@/ai');
-  const action = chooseAIAction(owner.state()!, seat, 'normal');
+  const action = chooseAIAction(owner.state()!, seat);
   expect(action).not.toBeNull();
   expect(owner.dispatch(action!)).toBeNull();
   await flush();

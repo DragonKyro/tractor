@@ -27,7 +27,7 @@ import { create } from 'zustand';
 import type { Seat } from '@/core/types';
 import { randomSeed } from '@/core/rng';
 import { freeSeatColor, SEAT_COLORS } from '@/core/seatColors';
-import { AI_LEVELS, prepareAi } from '@/ai';
+import { prepareAi } from '@/ai';
 import { defaultConfig, MAX_PLAYERS, MIN_PLAYERS, normalizeConfig, validateConfig, type TractorConfig } from '@/game/config';
 import { createInitialState } from '@/game/engine';
 import type { TractorState } from '@/game/types';
@@ -129,9 +129,8 @@ interface NetworkStore {
   hostRemoveSeat(seatId: string): void;
   /** Host: move a seat earlier / later round the table (partners sit opposite). */
   hostMoveSeat(seatId: string, delta: -1 | 1): void;
-  /** Rename / recolor a seat: your own, or (host) an AI seat, whose difficulty
-   *  (`aiLevel`) the host also sets. A color another seat wears swaps. */
-  editSeat(seatId: string, patch: { name?: string; color?: string; aiLevel?: string }): void;
+  /** Rename / recolor a seat: your own, or (host) an AI seat. A color another seat wears swaps. */
+  editSeat(seatId: string, patch: { name?: string; color?: string }): void;
   /** Sit at the table (between matches, while there's room). */
   takeSeat(): void;
   /** Host: start a match from the lobby. Resolves with why it couldn't, or null. */
@@ -203,10 +202,6 @@ function seatEdit(lobby: LobbyState, uuid: string, name: string): LobbyState | n
   };
 }
 
-function withLevel(aiLevel: string | undefined): { aiLevel?: string } {
-  return aiLevel && AI_LEVELS.some((l) => l.id === aiLevel) ? { aiLevel } : {};
-}
-
 /** The online lobby's opening seats: the host, then any AI seats carried over from a local lobby. */
 function openingSeats(me: string, name: string, local?: Seat[]): Seat[] {
   const firstHuman = local?.find((s) => !s.isAI);
@@ -216,7 +211,7 @@ function openingSeats(me: string, name: string, local?: Seat[]): Seat[] {
     if (!s.isAI || seats.length >= MAX_PLAYERS) continue;
     const n = seats.filter((x) => x.isAI).length + 1;
     const color = seats.some((x) => x.color === s.color) ? freeSeatColor(seats) : s.color;
-    seats.push({ id: `ai-${n}`, name: s.name || `AI ${n}`, color, isAI: true, isLocal: false, ...withLevel(s.aiLevel) });
+    seats.push({ id: `ai-${n}`, name: s.name || `AI ${n}`, color, isAI: true, isLocal: false });
   }
   return seats;
 }
@@ -751,7 +746,6 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
         saveDisplayName(name);
         set({ myDisplayName: name });
       }
-      const aiLevel = target.isAI && patch.aiLevel && AI_LEVELS.some((l) => l.id === patch.aiLevel) ? patch.aiLevel : undefined;
       void editLobby((l) => {
         const seat = l.seats.find((x) => x.id === seatId);
         if (l.match !== null || !seat) return null;
@@ -759,9 +753,8 @@ export const useNetworkStore = create<NetworkStore>((set, get) => {
           ...seat,
           ...(name ? { name } : {}),
           ...(patch.color ? { color: patch.color } : {}),
-          ...(aiLevel ? { aiLevel } : {}),
         };
-        if (next.name === seat.name && next.color === seat.color && next.aiLevel === seat.aiLevel) return null;
+        if (next.name === seat.name && next.color === seat.color) return null;
         return {
           ...l,
           seats: l.seats.map((x) => (x.id === seatId ? next : patch.color && x.color === patch.color ? { ...x, color: seat.color } : x)),

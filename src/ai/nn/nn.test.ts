@@ -8,12 +8,15 @@ import type { Trump } from '@/game/trump';
 import type { TractorState } from '@/game/types';
 import { nextAutomatedStep } from '../driver';
 import { chooseAIAction } from '../index';
-import { NN_LEVELS, setNnLevel } from './levels';
-import { observe } from '../observation';
+import { setNetwork } from './network';
+import { observe, unseenCounts } from '../observation';
+import { leadCandidates, leadUnits } from '../plays';
+import { unitCards } from '@/game/format';
+import { effectiveSuit } from '@/game/trump';
 import { aiSeats } from '../simulate';
-import { actWithPolicy, legalFriendCalls, netPolicy, repairExchange, teacherIndex, type BidMemo, type CandidatePolicy } from './agent';
-import { CAND_DIM, emptyDraft, nextStep } from './decision';
-import { OBS_DIM, encodeObservation } from './encode';
+import { actWithPolicy, legalFriendCalls, netPolicy, repairExchange, type BidMemo, type CandidatePolicy } from './agent';
+import { ACTION_SPACE_VERSION, CAND_DIM, emptyDraft, nextStep } from './decision';
+import { ENCODER_VERSION, OBS_DIM, encodeObservation } from './encode';
 import { TractorPolicyNet, decodeTensor, halfToFloat, type TractorPolicyFile } from './runtime';
 import { CARD_SLOTS, cardAtSlot, slotOf } from './slots';
 import { floatToHalf, randomPolicyFile, toHalfPolicyFile } from './testSupport';
@@ -96,19 +99,30 @@ describe('encoder and candidates', () => {
     });
     expect(plays).toBeGreaterThan(100);
   });
+});
 
-  it('find a teacher’s choice among the candidates (the distillation label)', () => {
-    // A teacher is any other player's action; candidates come from the same generator, so its pick is among them.
-    const teacher = netPolicy(new TractorPolicyNet(randomPolicyFile(31, { seat: [8], trunk: [16], cand: [8], joint: 8 })));
-    let found = 0;
-    let total = 0;
-    walk(4, {}, 21, (s, seat) => {
-      const st = nextStep(observe(s, seat))!;
-      if (!('decision' in st)) return;
-      total++;
-      if (teacherIndex(st.decision, emptyDraft(), actWithPolicy(s, seat, teacher)) >= 0) found++;
-    });
-    expect(found / total).toBeGreaterThan(0.95);
+describe('lead candidates', () => {
+  it('add part-boss and near-boss variants of a suit’s throw, all legal plays', () => {
+    const key = (c: readonly string[]) => c.slice().sort().join(',');
+    let variants = 0;
+    for (const seed of [17, 23, 31, 47, 59]) {
+      walk(4, {}, seed, (s, seat) => {
+        const obs = observe(s, seat);
+        if (!obs.can.play || obs.trick?.format) return;
+        const leads = leadCandidates(obs, unseenCounts(obs));
+        const units = new Set(leadUnits(obs).map((u) => key(unitCards(u))));
+        const throwsBySuit = new Map<string, number>();
+        for (const cards of leads) {
+          expect(() => applyAction(s, { type: 'play', seat, cards })).not.toThrow();
+          if (units.has(key(cards))) continue;
+          const suit = effectiveSuit(obs.trump!, cards[0]!);
+          throwsBySuit.set(suit, (throwsBySuit.get(suit) ?? 0) + 1);
+        }
+        if ([...throwsBySuit.values()].some((n) => n >= 2)) variants++;
+      });
+      if (variants > 0) break;
+    }
+    expect(variants).toBeGreaterThan(0);
   });
 });
 
@@ -239,10 +253,10 @@ describe('float16 policy files', () => {
   });
 });
 
-describe('network levels', () => {
-  it('play every table, both modes, up to 12 players', () => {
+describe('chooseAIAction', () => {
+  it('plays the installed network at every table, both modes, up to 12 players', () => {
     const net = new TractorPolicyNet(randomPolicyFile(13));
-    setNnLevel({ id: 'nn-test', label: 'Test', url: '' }, net);
+    setNetwork(net);
     const atFirstPlay = (n: number, mode: 'tractor' | 'findingFriends') => {
       let s = createMatchAt({ ...defaultConfig(n), gameMode: mode }, 21, aiSeats(n), { levels: Array(n).fill('7'), landlord: 0 });
       while (s.round.stage !== 'play') s = applyAction(s, nextAutomatedStep(s, () => true)!.action);
@@ -251,7 +265,7 @@ describe('network levels', () => {
     for (const [n, mode] of [[4, 'tractor'], [4, 'findingFriends'], [9, 'findingFriends'], [12, 'tractor']] as const) {
       const s = atFirstPlay(n, mode);
       const seat = s.round.trick!.order[0]!;
-      expect(chooseAIAction(s, seat, 'nn-test')).toEqual(actWithPolicy(s, seat, netPolicy(net)));
+      expect(chooseAIAction(s, seat)).toEqual(actWithPolicy(s, seat, netPolicy(net)));
     }
   });
 });
@@ -274,49 +288,45 @@ describe('friend calls', () => {
   });
 });
 
-describe('the shipped difficulty levels', () => {
-  const read = (id: string) => JSON.parse(readFileSync(join(process.cwd(), 'src/ai/nn/policies', `${id}.json`), 'utf8')) as TractorPolicyFile;
-  const shipped = () => NN_LEVELS.slice(0, 3); // tests may register more levels after these
+describe('the shipped network', () => {
+  const read = () => JSON.parse(readFileSync(join(process.cwd(), 'src/ai/nn/policy.json'), 'utf8')) as TractorPolicyFile;
 
-  it('are Easy, Normal and Hard: three valid policy files from one run, in order of training', () => {
-    expect(shipped().map((l) => [l.id, l.label])).toEqual([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']]);
-    expect(shipped().map((l) => read(l.id).meta?.update)).toEqual([100, 500, 2000]);
-    for (const l of shipped()) {
-      const f = read(l.id);
-      expect(f.format).toBe('tractor/seat-mlp@3');
-      expect(new Set(Object.values(f.tensors).map((t) => t.dtype))).toEqual(new Set(['f16']));
-      expect(() => new TractorPolicyNet(f)).not.toThrow();
-    }
+  it('is update 2000 of run v4, a float16 policy file for this encoder and action space', () => {
+    const f = read();
+    expect(f.format).toBe('tractor/seat-mlp@3');
+    expect([f.encoderVersion, f.actionSpaceVersion]).toEqual([ENCODER_VERSION, ACTION_SPACE_VERSION]);
+    expect([f.meta?.run, f.meta?.update]).toEqual(['v4', 2000]);
+    expect(new Set(Object.values(f.tensors).map((t) => t.dtype))).toEqual(new Set(['f16']));
+    expect(() => new TractorPolicyNet(f)).not.toThrow();
   });
 
-  it('are fetched from their URLs, built once, and a failed fetch can be retried', async () => {
+  it('is fetched once, and a failed fetch can be retried', async () => {
     vi.resetModules();
     let calls = 0;
     let failNext = true;
-    vi.stubGlobal('fetch', async (url: string) => {
+    vi.stubGlobal('fetch', async () => {
       calls++;
       if (failNext) {
         failNext = false;
         return { ok: false, status: 503, json: async () => ({}) };
       }
-      return { ok: true, status: 200, json: async () => read(url.split('/').pop()!.replace(/\.json.*$/, '').replace(/-[\w-]{8}$/, '')) };
+      return { ok: true, status: 200, json: async () => read() };
     });
     try {
-      const levels = await import('./levels');
-      expect(levels.loadedNnLevel('hard')).toBeNull();
-      await expect(levels.loadNnLevel('hard')).rejects.toThrow(/HTTP 503/);
-      const net = await levels.loadNnLevel('hard');
-      expect(levels.loadedNnLevel('hard')).toBe(net);
-      expect(await levels.loadNnLevel('hard')).toBe(net); // cached: no second fetch
+      const network = await import('./network');
+      expect(network.loadedNetwork()).toBeNull();
+      await expect(network.loadNetwork()).rejects.toThrow(/HTTP 503/);
+      const net = await network.loadNetwork();
+      expect(network.loadedNetwork()).toBe(net);
+      expect(await network.loadNetwork()).toBe(net); // cached: no second fetch
       expect(calls).toBe(2);
-      await expect(levels.loadNnLevel('no-such-level')).rejects.toThrow(/no AI level/);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('play a whole round at a 4-player table and a 5-player Finding Friends table', () => {
-    const nets = shipped().map((l) => new TractorPolicyNet(read(l.id)));
+  it('plays a whole round at a 4-player table and a 5-player Finding Friends table', () => {
+    const policy = netPolicy(new TractorPolicyNet(read()));
     for (const [n, mode] of [[4, 'tractor'], [5, 'findingFriends']] as const) {
       let s = createMatchAt({ ...defaultConfig(n), gameMode: mode }, 5, aiSeats(n), { levels: Array(n).fill('7'), landlord: 1 });
       for (let i = 0; i < 4000 && s.round.stage !== 'roundOver'; i++) {
@@ -325,7 +335,7 @@ describe('the shipped difficulty levels', () => {
           continue;
         }
         const seat = activeSeat(s);
-        const a = seat === null ? null : actWithPolicy(s, seat, netPolicy(nets[seat % nets.length]!));
+        const a = seat === null ? null : actWithPolicy(s, seat, policy);
         if (!a) throw new Error(`stuck at ${s.round.stage}`);
         s = applyAction(s, a);
       }

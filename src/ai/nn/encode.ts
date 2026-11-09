@@ -1,4 +1,5 @@
-// Tractor learned agent — the observation encoder (v3).
+// Tractor learned agent — the observation encoder (v4; the fields marked v4
+// were appended to v3's at the end of each block).
 //
 // One flat float vector per decision, from a seat's Observation only (no
 // hidden cards): a global block, then MAX_SEATS (12) seat blocks of the same
@@ -25,6 +26,15 @@
 //            known: bid cards and failed throws, less what it has played)
 //            + level, side, captured points, tricks won, cards left, known
 //            voids, this trick's state, bids, position (SEAT fields)
+//   v4       seat: when each card was led / discarded (the order of signals),
+//            trumps played, tricks ruffed and discarded in, points fed to its
+//            own side vs the other, whether it may still hold trump and how
+//            many at most · global: per suit group, my length, unseen cards
+//            and points, whether my top single / pair is the boss, how many
+//            unseen cards beat my top, opponents / partners known void ·
+//            trump control (my share of the trumps left, opponents who may
+//            still hold trump) · the endgame (tricks left, the final trick, the
+//            largest kitty multiplier my hand can still make)
 //
 // ENCODER_VERSION goes in every policy file; a policy trained on another
 // version is refused (bump it with any change to what a slot means).
@@ -34,12 +44,13 @@ import { MAX_PLAYERS } from '@/game/config';
 import { scoringParams } from '@/game/engine';
 import { materialize } from '@/game/scoring';
 import { unitSize, type TrickUnit } from '@/game/format';
-import { effectiveSuit, type EffSuit, type Trump } from '@/game/trump';
+import { compareEffective, effectiveSuit, type EffSuit, type Trump } from '@/game/trump';
 import type { PlayedCards } from '@/game/trick';
 import { knownVoids, unseenCounts, type Observation } from '../observation';
+import { leadUnits, unitIsBoss, unseenAbove } from '../plays';
 import { CARD_SLOTS, GROUPS, TRUMP_GROUP, addCards, sideBlock, slotOf } from './slots';
 
-export const ENCODER_VERSION = 3;
+export const ENCODER_VERSION = 4;
 /** Every table the game allows. */
 export const MAX_SEATS = MAX_PLAYERS;
 
@@ -106,11 +117,24 @@ const S = {
   thisTrick: SEAT.add('thisTrick', CARD_SLOTS),
   lastTrick: SEAT.add('lastTrick', CARD_SLOTS),
   shown: SEAT.add('shown', CARD_SLOTS),
+  // v4
+  ledWhen: SEAT.add('ledWhen', CARD_SLOTS),
+  discardWhen: SEAT.add('discardWhen', CARD_SLOTS),
+  trumpsPlayed: SEAT.add('trumpsPlayed', 1),
+  ruffTricks: SEAT.add('ruffTricks', 1),
+  discardTricks: SEAT.add('discardTricks', 1),
+  pointsToOwnSide: SEAT.add('pointsToOwnSide', 1),
+  pointsToOtherSide: SEAT.add('pointsToOtherSide', 1),
+  mayHoldTrump: SEAT.add('mayHoldTrump', 1),
+  trumpsLeftMax: SEAT.add('trumpsLeftMax', 1),
 };
 export const SEAT_DIM = SEAT.dim;
 export const SEAT_LAYOUT = SEAT;
 
 // ---------------------------------------------------------------- global block
+
+/** Per suit group: my length, unseen count, unseen points, top single boss, top pair boss, unseen above my top, opponents void, a partner void. */
+const GROUP_STATS = 8;
 
 const GLOBAL = new Layout();
 const G = {
@@ -170,6 +194,10 @@ const G = {
   throwEval: GLOBAL.add('throwEval', 3),
   kittyPower: GLOBAL.add('kittyPower', 1),
   throwPenalty: GLOBAL.add('throwPenalty', 1),
+  // v4
+  groupStats: GLOBAL.add('groupStats', GROUPS * GROUP_STATS),
+  trumpControl: GLOBAL.add('trumpControl', 3),
+  endgame: GLOBAL.add('endgame', 3),
 };
 export const GLOBAL_DIM = GLOBAL.dim;
 export const GLOBAL_LAYOUT = GLOBAL;
@@ -227,6 +255,11 @@ export function threshold(obs: Observation): number {
   return m.landlordWins[m.landlordWins.length - 1]!.end;
 }
 
+/** compareEffective for sorting (cards of one group). */
+function compareEffectiveSafe(trump: Trump, a: Card, b: Card): number {
+  return compareEffective(trump, a, b);
+}
+
 /** Group (side block or trump) of a card under the slot trump. */
 export function groupOf(trump: Trump, card: Card): number {
   if (effectiveSuit(trump, card) === 'T') return TRUMP_GROUP;
@@ -273,22 +306,40 @@ export function encodeObservation(obs: Observation, out: Float32Array = new Floa
   const tricksWon = new Array<number>(n).fill(0);
   const discardedBefore = new Array<boolean>(n).fill(false);
   const played = Array.from({ length: n }, () => new Map<Card, number>());
+  const totalTricksV4 = obs.tricks.length + Math.max(1, obs.hand.length);
+  const ruffTricks = new Array<number>(n).fill(0);
+  const discardTricks = new Array<number>(n).fill(0);
+  const trumpsPlayed = new Array<number>(n).fill(0);
+  let trickNo = 0;
   const classify = (leader: number, suit: EffSuit | null, plays: readonly PlayedCards[]) => {
     const firstHere: Card[][] = Array.from({ length: n }, () => []);
+    const when = (trickNo + 1) / totalTricksV4;
     for (const p of plays) {
       const o = so(p.seat);
       for (const c of p.cards) played[p.seat]!.set(c, (played[p.seat]!.get(c) ?? 0) + 1);
+      if (realTrump) for (const c of p.cards) if (effectiveSuit(realTrump, c) === 'T') trumpsPlayed[p.seat]!++;
       if (p.seat === leader || !suit || !realTrump) {
         addCards(out, o + S.led, trump, p.cards, w);
+        for (const c of p.cards) out[o + S.ledWhen + slotOf(trump, c)] = Math.max(out[o + S.ledWhen + slotOf(trump, c)]!, when);
         continue;
       }
+      let ruffed = false;
+      let discarded = false;
       for (const c of p.cards) {
         const es = effectiveSuit(realTrump, c);
         const plane = es === suit ? S.followed : es === 'T' ? S.ruffed : S.discarded;
         out[o + plane + slotOf(trump, c)]! += w;
+        if (plane === S.ruffed) ruffed = true;
+        if (plane === S.discarded) {
+          discarded = true;
+          out[o + S.discardWhen + slotOf(trump, c)] = Math.max(out[o + S.discardWhen + slotOf(trump, c)]!, when);
+        }
         if (plane === S.discarded && !discardedBefore[p.seat]) firstHere[p.seat]!.push(c);
       }
+      if (ruffed) ruffTricks[p.seat]!++;
+      if (discarded) discardTricks[p.seat]!++;
     }
+    trickNo++;
     for (let seat = 0; seat < n; seat++) {
       if (firstHere[seat]!.length === 0) continue;
       addCards(out, so(seat) + S.firstDiscard, trump, firstHere[seat]!, w);
@@ -378,6 +429,85 @@ export function encodeObservation(obs: Observation, out: Float32Array = new Floa
     out[o + S.holdsWinningBid] = winning && winning.seat === seat ? 1 : 0;
     out[o + S.bidDone] = obs.bidDone.includes(seat) ? 1 : 0;
     out[o + S.isDealer] = obs.dealer === seat ? 1 : 0;
+  }
+
+  // ---- v4 seat stats: points fed to each side, trumps
+  const pointsTo = Array.from({ length: n }, () => [0, 0]); // [own side, other side]
+  for (const t of obs.tricks) {
+    for (const p of t.plays) {
+      const pts = totalPoints(p.cards);
+      if (!pts || sides[p.seat] === '?' || sides[t.winner] === '?') continue;
+      pointsTo[p.seat]![sides[p.seat] === sides[t.winner] ? 0 : 1]! += pts;
+    }
+  }
+  let unseenTrumps = 0;
+  if (realTrump) for (const [c, k] of unseen) if (k > 0 && effectiveSuit(realTrump, c) === 'T') unseenTrumps += k;
+  for (let seat = 0; seat < n; seat++) {
+    const o = so(seat);
+    out[o + S.trumpsPlayed] = trumpsPlayed[seat]! / (18 * decks);
+    out[o + S.ruffTricks] = ruffTricks[seat]! / totalTricksV4;
+    out[o + S.discardTricks] = discardTricks[seat]! / totalTricksV4;
+    out[o + S.pointsToOwnSide] = pointsTo[seat]![0]! * pointsScale;
+    out[o + S.pointsToOtherSide] = pointsTo[seat]![1]! * pointsScale;
+    if (realTrump && seat !== me) {
+      const may = !voids[seat]!.has('T');
+      out[o + S.mayHoldTrump] = may ? 1 : 0;
+      out[o + S.trumpsLeftMax] = may ? Math.min(obs.handSizes[seat]!, unseenTrumps) / initialHand : 0;
+    }
+  }
+
+  // ---- v4 global: per suit group, trump control, endgame
+  if (realTrump) {
+    const opps: number[] = [];
+    const partners: number[] = [];
+    for (let seat = 0; seat < n; seat++) {
+      if (seat === me) continue;
+      const rel = sideOf(seat);
+      if (rel === 1) partners.push(seat);
+      else if (rel === 2) opps.push(seat);
+    }
+    const groupSuit = (g: number): EffSuit | null => {
+      if (g === TRUMP_GROUP) return 'T';
+      for (const c of obs.hand) if (groupOf(trump, c) === g) return effectiveSuit(realTrump, c);
+      for (const [c] of unseen) if (groupOf(trump, c) === g) return effectiveSuit(realTrump, c);
+      return null;
+    };
+    const myUnits = leadUnits(obs);
+    for (let g = 0; g < GROUPS; g++) {
+      const o = G.groupStats + g * GROUP_STATS;
+      const mine = obs.hand.filter((c) => groupOf(trump, c) === g);
+      let unseenN = 0;
+      let unseenPts = 0;
+      for (const [c, k] of unseen) {
+        if (k <= 0 || groupOf(trump, c) !== g) continue;
+        unseenN += k;
+        unseenPts += totalPoints([c]) * k;
+      }
+      out[o + 0] = mine.length / initialHand;
+      out[o + 1] = unseenN / (20 * decks);
+      out[o + 2] = unseenPts * pointsScale;
+      if (mine.length) {
+        const top = mine.slice().sort((a, b) => -compareEffectiveSafe(realTrump, a, b))[0]!;
+        out[o + 3] = unseenAbove(realTrump, top, unseen) === 0 ? 1 : 0;
+        out[o + 5] = Math.min(1, unseenAbove(realTrump, top, unseen) / 8);
+        const pairs = myUnits.filter((u) => u.kind === 'repeated' && u.count === 2 && groupOf(trump, u.card) === g);
+        out[o + 4] = pairs.some((u) => unitIsBoss(realTrump, u, unseen)) ? 1 : 0;
+      }
+      const es = groupSuit(g);
+      if (es) {
+        out[o + 6] = opps.length ? opps.filter((s2) => voids[s2]!.has(es)).length / opps.length : 0;
+        out[o + 7] = partners.some((s2) => voids[s2]!.has(es)) ? 1 : 0;
+      }
+    }
+    const myTrumps = obs.hand.filter((c) => effectiveSuit(realTrump, c) === 'T').length;
+    out[G.trumpControl + 0] = myTrumps / Math.max(1, myTrumps + unseenTrumps);
+    out[G.trumpControl + 1] = opps.length ? opps.filter((s2) => !voids[s2]!.has('T')).length / opps.length : 0;
+    out[G.trumpControl + 2] = partners.some((s2) => voids[s2]!.has('T')) ? 1 : 0;
+    const largest = myUnits.reduce((m, u) => Math.max(m, unitSize(u)), 0);
+    const mult = obs.config.kittyPenalty === 'power' ? 2 ** largest : 2 * largest;
+    out[G.endgame + 0] = obs.hand.length / initialHand;
+    out[G.endgame + 1] = obs.stage === 'play' && obs.hand.length > 0 && obs.hand.length <= (trick?.format ? trick.format.units.reduce((a, u) => a + unitSize(u), 0) : 1) ? 1 : 0;
+    out[G.endgame + 2] = Math.min(1, mult / 16);
   }
 
   // ---- global features

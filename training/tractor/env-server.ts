@@ -5,21 +5,19 @@
 //   ← {"ok":true,"dims":{global,seat,maxSeats,cand,maxCandidates,cardSlots,privGlobal,privSeat},
 //      "layouts":{global,seat,cand},"kinds":{bid:0,…},
 //      "encoderVersion":…,"actionSpaceVersion":…,"policyFormat":…}
-//   → {"cmd":"reset","options":{numEnvs, seed, lineups, scenario, reward, quota, teacher,
-//      benchmarkPolicy, privileged, pointsShaping, duplicate, maxSteps,
-//      matches, maxRounds}}
+//   → {"cmd":"reset","options":{numEnvs, seed, lineups, scenario, reward, quota,
+//      privileged, pointsShaping, duplicate, maxSteps, matches, maxRounds}}
 //   → {"cmd":"step","actions":[candidate index, …]}     (one per env)
 //   ← {"ok":true,"n":…,"seatRows":…,"candRows":…,"seat":[…],"role":[…],"kind":[…],
 //      "players":[…],"reward":[…],"done":[…],"episodes":[…],
 //      "binary":[["glob",bytes],["seatCount",bytes],["seatSlot",bytes],["seats",bytes],
-//                ["privGlob",bytes],["privSeats",bytes],["count",bytes],["cand",bytes],["teacher",bytes]]}
+//                ["privGlob",bytes],["privSeats",bytes],["count",bytes],["cand",bytes]]}
 //     followed by those raw bytes, in that order: f32 little-endian global blocks
 //     (n × global), i16 seat blocks per row, i8 their slots, f32 seat blocks packed
 //     in row order (seatRows × seat), f32 privileged features (n × privGlobal,
 //     seatRows × privSeat; empty unless privileged), i16 candidate count per row,
-//     f32 candidates packed in row order (candRows × cand), i16 teacher index per
-//     row (−1 = none)
-//   → {"cmd":"configure","options":{lineups?, scenario?, teacher?}}  ← {"ok":true}
+//     f32 candidates packed in row order (candRows × cand)
+//   → {"cmd":"configure","options":{lineups?, scenario?}}  ← {"ok":true}
 //   → {"cmd":"policyLogits","path":"<policy.json>"}
 //   ← {"ok":true,"logits":[[…], …]}   (the TS runtime on every env's pending row — parity checks)
 //   → {"cmd":"close"}
@@ -45,7 +43,7 @@ class BatchReply {
     const b = this.b;
     const arrays: Array<[string, ArrayBufferView]> = [
       ['glob', b.glob], ['seatCount', b.seatCount], ['seatSlot', b.seatSlot], ['seats', b.seats],
-      ['privGlob', b.privGlob], ['privSeats', b.privSeats], ['count', b.count], ['cand', b.cand], ['teacher', b.teacher],
+      ['privGlob', b.privGlob], ['privSeats', b.privSeats], ['count', b.count], ['cand', b.cand],
     ];
     const header = {
       ok: true,
