@@ -45,8 +45,21 @@ function fail(message: string): never {
 
 const LOG_LIMIT = 250;
 
+/**
+ * Deep copy of plain JSON data (the state's only kind). Several times faster
+ * than structuredClone, which serializes; this runs on every action (the deal
+ * is one action per card), so it dominates headless play and training.
+ */
 function clone<T>(v: T): T {
-  return typeof structuredClone === 'function' ? structuredClone(v) : (JSON.parse(JSON.stringify(v)) as T);
+  if (typeof v !== 'object' || v === null) return v;
+  if (Array.isArray(v)) {
+    const a = new Array(v.length);
+    for (let i = 0; i < v.length; i++) a[i] = clone(v[i]);
+    return a as T;
+  }
+  const o: Record<string, unknown> = {};
+  for (const k in v) o[k] = clone((v as Record<string, unknown>)[k]);
+  return o as T;
 }
 
 export function seatName(state: TractorState, seat: number): string {
@@ -85,20 +98,36 @@ export function scoringParams(config: TractorConfig): ScoringParams {
 // ------------------------------------------------------------------ setup
 
 export function createInitialState(config: TractorConfig, seed: number, seats: Seat[]): TractorState {
+  return createMatchAt(config, seed, seats, {});
+}
+
+/**
+ * A match that starts at chosen levels, with a chosen landlord (or none: the
+ * first round's bidding decides). For training and tests — the AI practises
+ * every rank situation without playing up from 2. Pure, like createInitialState.
+ */
+export function createMatchAt(
+  config: TractorConfig,
+  seed: number,
+  seats: Seat[],
+  at: { levels?: Level[]; landlord?: number | null },
+): TractorState {
   const cfg = normalizeConfig(config, seats.length);
   const errors = validateConfig(cfg, seats);
   if (errors.length) throw new Error(errors.join(' '));
   const rules = resolveRules(cfg, seats);
   const rngState = createRng(seed);
-  const dealer = rngInt(rngState, seats.length);
+  const landlord = at.landlord ?? null;
+  const randomDealer = rngInt(rngState, seats.length);
+  const dealer = landlord ?? randomDealer;
   const s: TractorState = {
     status: 'playing',
     seats: seats.map((x) => ({ ...x })),
     config: cfg,
     rules,
     rngState,
-    levels: seats.map(() => cfg.startingRank as Level),
-    landlord: null,
+    levels: at.levels ? at.levels.slice() : seats.map(() => cfg.startingRank as Level),
+    landlord,
     round: emptyRound(1, dealer, seats.length),
     history: [],
     log: [],

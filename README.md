@@ -12,7 +12,7 @@ npm run dev          # http://localhost:5173/tractor/
 ```
 
 - **Hot-seat**: set two or more seats to human in the lobby. The screen hides hands between turns ("pass the device"), and trump is declared in turns after the deal.
-- **Vs AI**: one human seat, the rest AI (Easy or Normal). Trump is declared live while the cards are dealt.
+- **Vs AI**: one human seat, the rest AI (Easy, Normal or Hard). Trump is declared live while the cards are dealt.
 - **Online**: in the lobby, "Host online" opens a room; friends join with the 4-letter code or the invite link (`?room=CODE`). The host's device deals and runs the AI seats; if it drops, another player's device takes over.
 
 ## Commands
@@ -23,7 +23,8 @@ npm run dev          # http://localhost:5173/tractor/
 | `npm run build` | typecheck + production build to `dist/` |
 | `npm run test:run` | all tests (rules ports from shengji, engine, full AI matches, online over an in-memory server) |
 | `FIREBASE_LIVE=1 npx vitest run src/store/networkStore.live.test.ts` | online test against the real database (prints the room code to clean up) |
-| `npm run sim -- 4 20 normal,easy` | headless AI-vs-AI matches with stats (players, matches, seat levels) |
+| `npm run sim -- 4 6 hard,easy` | headless matches between the shipped AI levels, with stats (players, matches, seat levels) |
+| `npm run train:build`, `python training/tractor/train.py --run main` | build the env server and train the learned AI (see [training/README.md](training/README.md)) |
 | `npm run deploy:rules` | deploy the database rules (merged into the shared project's live rules, see below) |
 
 ## Online setup
@@ -54,7 +55,7 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Kitty exchange; Finding Friends calls ("the 2nd A♠"), reveal on play, double-join policy, friend-call restrictions
 - [x] Scoring with shengji's step table, kitty multiplier (×2·unit or 2^unit), short-handed bonus level, must-defend rules, next landlord, game end past the final rank
 - [x] 2–12 players, 1–12 decks, auto or explicit kitty size (removes low cards to deal evenly)
-- [x] Heuristic AI (Easy / Normal) deciding from a seat's own view only; Normal beats Easy 30/30 in 4-player matches
+- [x] Three AI levels, **Easy / Normal / Hard**: checkpoints at updates 100, 500 and 2000 of one training run (v3), deciding from a seat's own view only. Each is a 3.6 MB float16 file fetched when a match with that level starts. Head to head on 4-player Tractor duplicate deals (576 pairs each): Normal beats Easy by +0.10 ± 0.04 levels a round, Hard beats Normal by +0.05 ± 0.04, Hard beats Easy by +0.14 ± 0.04. The hand-written heuristic AI that came first has been removed.
 - [x] Options to hide the defenders' captured points and the record of played cards (the table keeps count; everything shows at the round's end)
 - [x] "End round early": offered only when public information proves nothing left can change the result — unseen point cards, the largest possible kitty multiplier and future throw penalties all included (`canEndRoundEarly`); checked against playing the round out in AI games (`earlyEnd.test.ts`)
 - [x] Live deal one card at a time, each player drawing in turn: auto-draw or click to draw (D / Space); deal speed and the post-deal "time to overcall" (3 / 6 / 12 s, with a countdown) are set right in the deal panel; "No more bids" lets an AI landlord take the kitty at once
@@ -70,11 +71,30 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Firebase: `/tractor` namespace, rules deployed through the merge script, live round-trip test
 - [x] UI: home, lobbies, options (with house rules), felt table, hand with selection, bid / exchange / friend / play panels, hints, log, round summary, rules page, four-color cards, AI speed
 
+- [x] Learned AI, v3 (`src/ai/nn`, `training/tractor`, see [training/README.md](training/README.md)):
+  - an encoder of a seat's view with a block per seat for every table up to 12 players: how each seat played each card (led, followed, ruffed, discarded, first discard, this and the last trick, cards shown), levels, sides, voids, bids
+  - a wider action space: every discard and every follow the rules leave open, with features for what each does to the hand and the side
+  - a shared per-seat encoder: 1.36M parameters, a 3.6 MB float16 policy file
+  - plain-TypeScript runtime, TS/PyTorch parity tested
+  - the curriculum: 85% 4-player Tractor, 15% every other table
+  - partners are always the same model; opponents are self-play, past snapshots and the v2 benchmark
+  - distillation from the v2 network, then PPO with a perfect-information critic (training only) and point shaping
+  - duplicate-deal evals against the v2 benchmark (`training/benchmarks/v2-update1500.json`, run by a frozen copy of the v2 code)
+  - network AI levels play every table in the game
+- [x] Learned AI v2 (superseded): one run of 2,486 updates on 4/5/6-player tables. Its update 1500 beat the old hand-written heuristic in about 100% of 4- and 6-player Tractor matches, about 8 levels ahead, and is kept as the benchmark.
+- [x] v3 run: stopped at update 2760 (+0.18 ± 0.03 a round against the benchmark, 75% of full matches won). The policies after update 2000 were deleted: head to head, update 2760 vs 2000 is +0.01 ± 0.04, indistinguishable. The weights at update 2760 remain in the run's `ckpt/latest.pt`.
+- [x] `applyAction` copies the state with a hand-written JSON deep copy instead of `structuredClone`. The states are identical (checked on seeded full matches) and headless play is 3.5× faster.
+
 ### To do
 
 AI
-- [ ] Learned AI at several difficulties (see `training/README.md`): observation encoder, env server, PPO trainer, exported policies loaded by `prepareAi`
-- [ ] Better heuristics: void / trump tracking per player, smarter friend calls and partner inference in Finding Friends, deliberate throws, end-game kitty play
+- [ ] Make the levels further apart (Hard is only +0.05 a round over Normal): train further, using the ideas below
+- [ ] Wider opponent pool: draw half the past-snapshot opponents from the whole run history, not just the newest 8 (self-play plateaued around update 500-1000)
+- [ ] Signaling: check whether v3 partners learn conventions. Measure a network pair against a network paired with the benchmark, and how readable a seat's hidden cards are from its plays. Shuffle the side-suit order during training if arbitrary suit codes appear
+- [ ] Belief head: an auxiliary loss predicting each opponent's hand from the public record, to sharpen what the network infers about hidden cards
+- [ ] Search at play time: sample hidden hands and simulate ahead for the key decisions (strongest, but costly in the browser)
+- [ ] Faster benchmark seats: the v2 network runs in plain TypeScript inside the env (about 3 ms a move). Batch it on the GPU if training against it more than for distillation and evals
+- [ ] Train on more tables: 4-player Tractor is 85% of the curriculum; the other tables get 15% between them
 
 UI / UX
 - [ ] Try the offline hand-off and the online draw flow with real people on several devices (covered by unit / fake-server tests and typechecks, not yet by hand)

@@ -8,7 +8,7 @@
 // and play the AI seats. Each human's own device draws their cards.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { chooseAIAction } from '@/ai';
+import { DEFAULT_AI_LEVEL, adviseAction } from '@/ai';
 import { nextAutomatedStep } from '@/ai/driver';
 import { randomSeed } from '@/core/rng';
 import { activeSeat, createInitialState, drawingSeat } from '@/game/engine';
@@ -140,8 +140,12 @@ export function GameHost({ onExit, onReturnToLobby }: Props) {
     const t = setTimeout(() => {
       const cur = useGameStore.getState().state;
       if (cur !== state) return;
-      const a: Action | null = drawing ? { type: 'draw', seat: waitingHuman } : chooseAIAction(cur, waitingHuman, 'normal');
-      if (a) useGameStore.getState().dispatch(a, { ai: true });
+      const send = (a: Action | null) => {
+        // The network may have taken a moment to load: only act if nothing moved meanwhile.
+        if (a && useGameStore.getState().state === cur) useGameStore.getState().dispatch(a, { ai: true });
+      };
+      if (drawing) send({ type: 'draw', seat: waitingHuman });
+      else void adviseAction(cur, waitingHuman, DEFAULT_AI_LEVEL).then(send, () => undefined);
     }, delay);
     return () => clearTimeout(t);
   }, [state, online, driving, waitingHuman, waitingOffline, drawer, mySeat]);

@@ -4,7 +4,7 @@
 // the selection, H selects a hint, D or Space draws.
 
 import { useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { chooseAIAction } from '@/ai';
+import { adviseAction } from '@/ai';
 import { RANKS, SUITS, SUIT_SYMBOL, cardLabel, rankLabel, type Card, type Rank, type Suit } from '@/game/cards';
 import {
   activeSeat,
@@ -225,8 +225,9 @@ export function ActionPanel({ state, viewer, hand, selected, setSelected, dispat
   const playIt = () => act({ type: 'play', seat: viewer, cards: picked, ...(readings.length > 1 && reading !== null ? { format: reading } : {}) });
 
   function hint() {
-    const a = chooseAIAction(state, viewer!, 'normal');
-    if (a?.type === 'play') setSelected(indicesOf(hand, a.cards));
+    void adviseAction(state, viewer!).then((a) => {
+      if (a?.type === 'play') setSelected(indicesOf(hand, a.cards));
+    }, () => undefined);
   }
   keys.current.hint = hint;
   if (canPlay) keys.current.primary = playIt;
@@ -329,20 +330,30 @@ function ExchangePanel({ state, viewer, hand, picked, setSelected, act, error, k
 }) {
   const r = state.round;
   const ff = state.rules.gameMode === 'findingFriends' && state.rules.numFriends > 0;
-  const [calls, setCalls] = useState<FriendCall[]>(() => {
-    const a = chooseAIAction(state, viewer, 'normal');
-    return a?.type === 'exchange' ? a.friends : [];
-  });
+  const [calls, setCalls] = useState<FriendCall[]>([]);
+  // Start the friend calls from the AI's suggestion once its network has loaded.
+  useEffect(() => {
+    if (!ff) return;
+    let live = true;
+    void adviseAction(state, viewer).then((a) => {
+      if (live && a?.type === 'exchange') setCalls((cur) => (cur.length ? cur : a.friends));
+    }, () => undefined);
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const problems = friendCallProblems(state, calls);
   const k = r.kittySize;
   const ready = picked.length === k && !(ff && problems.length > 0);
   const bury = () => act({ type: 'exchange', seat: viewer, bury: picked, friends: ff ? calls : [] });
 
   function suggest() {
-    const a = chooseAIAction(state, viewer, 'normal');
-    if (a?.type !== 'exchange') return;
-    setSelected(indicesOf(hand, a.bury));
-    if (ff) setCalls(a.friends);
+    void adviseAction(state, viewer).then((a) => {
+      if (a?.type !== 'exchange') return;
+      setSelected(indicesOf(hand, a.bury));
+      if (ff) setCalls(a.friends);
+    }, () => undefined);
   }
   keys.current.hint = suggest;
   if (ready) keys.current.primary = bury;

@@ -13,6 +13,7 @@ async function device(uuid: string) {
   const { useGameStore } = await import('@/store/gameStore');
   const driver = await import('@/ai/driver');
   const engine = await import('@/game/engine');
+  await import('@/test/setup'); // each device is a fresh module graph: give its AI levels the tiny test networks
   return {
     uuid,
     net: () => netModule.useNetworkStore.getState(),
@@ -70,7 +71,7 @@ async function table() {
 
 /**
  * One step of the match: the driving device runs the deal / AI seats; a
- * human seat's decision is made by its owner with the same heuristic.
+ * human seat's decision is made by its owner with the same AI.
  */
 async function step(devices: Device[]): Promise<boolean> {
   const host = devices[0]!;
@@ -152,7 +153,7 @@ describe('online tractor', () => {
     await flush();
     expect(JSON.stringify(guest.state())).toBe(JSON.stringify(host.state()));
     expect(host.state()!.round.bids.some((b) => b.seat === 1)).toBe(true);
-  });
+  }, 30_000);
 
   it('another device takes over the table when the host drops', async () => {
     const { host, guest } = await table();

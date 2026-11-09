@@ -11,6 +11,7 @@
     "test:run": "vitest run --passWithNoTests",
     "typecheck": "tsc",
     "sim": "vite-node training/simulate.ts",
+    "train:build": "vite build --config training/vite.config.ts",
     "deploy:rules": "npx -y firebase-tools@latest deploy --only database",
     "rules:merge": "node scripts/merge-db-rules.mjs"
   },
