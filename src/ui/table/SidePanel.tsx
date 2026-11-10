@@ -6,6 +6,7 @@ import { cardLabel, totalPoints } from '@/game/cards';
 import { ordinalText } from '@/game/engine';
 import type { TractorState } from '@/game/types';
 import { usePrefs, type AiSpeed, type BidWindow, type DealSpeed } from '@/store/prefsStore';
+import { SuitText } from '../SuitText';
 import { levelText, logLine, pointsHidden, roleOf } from './labels';
 
 type Tab = 'players' | 'log' | 'settings';
@@ -73,7 +74,7 @@ function Players({ state }: { state: TractorState }) {
           <ul>
             {r.friends.map((f, i) => (
               <li key={i}>
-                The {ordinalText(f.ordinal)} {cardLabel(f.card)} —{' '}
+                The {ordinalText(f.ordinal)} <SuitText text={cardLabel(f.card)} /> —{' '}
                 {f.seat !== null
                   ? f.seat === r.landlord
                     ? 'played by the landlord (no friend)'
@@ -114,7 +115,7 @@ function Log({ state }: { state: TractorState }) {
       {state.log.slice(-120).map((e) => (
         <div key={e.n} className={`log-row log-${e.kind}`}>
           {e.seat !== undefined && <span className="seat-dot" style={{ background: state.seats[e.seat]?.color }} />}
-          {logLine(state, e)}
+          <span><SuitText text={logLine(state, e)} /></span>
         </div>
       ))}
     </div>
@@ -157,7 +158,7 @@ function Settings({ canShowAllHands }: { canShowAllHands: boolean }) {
         <input type="checkbox" checked={p.sounds} onChange={(e) => p.set({ sounds: e.target.checked })} /> Sounds
       </label>
       <label className="opt-inline">
-        <input type="checkbox" checked={p.fourColor} onChange={(e) => p.set({ fourColor: e.target.checked })} /> Four-color suits
+        <input type="checkbox" checked={p.twoColor} onChange={(e) => p.set({ twoColor: e.target.checked })} /> Classic red / black suits
       </label>
       {canShowAllHands && (
         <label className="opt-inline">

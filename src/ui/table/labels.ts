@@ -1,17 +1,21 @@
 // Short UI strings for game things.
 
-import { SUIT_SYMBOL, levelLabel, type Level } from '@/game/cards';
+import { SUIT_SYMBOL, levelLabel, type Level, type Suit } from '@/game/cards';
 import type { Trump } from '@/game/trump';
 import type { LogEntry, TractorState } from '@/game/types';
 
-export function trumpParts(trump: Trump | null): { symbol: string; number: string; red: boolean; label: string } {
-  if (!trump) return { symbol: '?', number: '', red: false, label: 'Trump not set yet' };
+/** The trump as display parts; `suitClass` colours the symbol (empty for no-trump). */
+export function trumpParts(trump: Trump | null): { symbol: string; number: string; suit: Suit | null; suitClass: string; label: string } {
+  if (!trump) return { symbol: '?', number: '', suit: null, suitClass: '', label: 'Trump not set yet' };
   const number = trump.number === null ? '' : levelLabel(trump.number);
-  if (trump.kind === 'noTrump') return { symbol: 'NT', number: number ? ` · ${number}s` : '', red: false, label: trump.number === null ? 'No trump (jokers only)' : `No trump suit · ${number}s are trump` };
+  if (trump.kind === 'noTrump') {
+    return { symbol: 'NT', number: number ? ` · ${number}s` : '', suit: null, suitClass: '', label: trump.number === null ? 'No trump (jokers only)' : `No trump suit · ${number}s are trump` };
+  }
   return {
     symbol: SUIT_SYMBOL[trump.suit],
     number,
-    red: trump.suit === 'H' || trump.suit === 'D',
+    suit: trump.suit,
+    suitClass: `suit suit-${trump.suit}`,
     label: `${SUIT_SYMBOL[trump.suit]} is trump · ${number}s are trump`,
   };
 }

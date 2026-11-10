@@ -9,6 +9,7 @@ import { totalPoints } from '@/game/cards';
 import type { Action, TractorState } from '@/game/types';
 import { useGameStore } from '@/store/gameStore';
 import { CardRow } from '../CardView';
+import { SuitText } from '../SuitText';
 import { AllHands } from '../table/Table';
 import { Felt } from '../table/Felt';
 import { trumpParts } from '../table/labels';
@@ -117,12 +118,12 @@ export function Replay({ viewer }: { viewer: number | null }) {
           Round {roundIdx + 1}
           {r.trump && (
             <>
-              {' '}· trump <strong className={t.red ? 'red' : ''}>{t.symbol}{t.number}</strong>
+              {' '}· trump <strong><span className={t.suitClass}>{t.symbol}</span>{t.number}</strong>
             </>
           )}
           {r.landlord !== null && ` · landlord ${state.seats[r.landlord]!.name}`}
         </span>
-        {last && <span className="replay-last">{last.text}</span>}
+        {last && <span className="replay-last"><SuitText text={last.text} /></span>}
       </div>
       <Felt state={state} bottom={viewer ?? 0} />
       <AllHands state={state} />

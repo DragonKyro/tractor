@@ -173,8 +173,8 @@ function RoundsTable({ state }: { state: TractorState }) {
               <tr key={r.round}>
                 <td>{r.round}</td>
                 <td>{state.seats[r.landlord]!.name}</td>
-                <td className={t.red ? 'red' : ''}>
-                  {t.symbol}
+                <td>
+                  <span className={t.suitClass}>{t.symbol}</span>
                   {t.number}
                 </td>
                 <td>

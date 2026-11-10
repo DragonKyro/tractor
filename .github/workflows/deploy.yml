@@ -23,10 +23,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # `npm install` (NOT `npm ci`) — the committed lockfile carries DRW
-      # Artifactory URLs from the local environment; CI uses public
-      # npmjs.org via the project `.npmrc` and re-resolves the tree.
-      - run: npm install
+      - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
