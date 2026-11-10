@@ -8,6 +8,7 @@ import { createRng, rngInt, shuffle } from '@/core/rng';
 import { firstAndWinner, isValidBid, validBids, type Bid } from './bidding';
 import {
   SUITS,
+  SUIT_SYMBOL,
   buildDecks,
   cardLabel,
   cardPoints,
@@ -18,11 +19,13 @@ import {
   isJoker,
   levelIndex,
   levelLabel,
+  rankValue,
   removeCards,
   totalPoints,
   type Card,
   type Level,
   type Rank,
+  type Suit,
 } from './cards';
 import { normalizeConfig, resolveRules, validateConfig, type TractorConfig } from './config';
 import { describeShapes, requiredShapes, TrickError, type TractorRequirements } from './format';
@@ -361,7 +364,15 @@ export function playProblemFor(state: TractorState, seat: number, cards: readonl
   const p = playProblem(r.trick, r.trump, r.hands[seat]!, seat, cards, trickRules(state));
   if (p !== 'illegal') return p;
   const shapes = r.trick.format ? requiredShapes(r.trump, r.trick.format, r.hands[seat]!, state.config.trickDrawPolicy) : null;
-  return shapes ? `You have to follow with ${describeShapes(shapes)} in the led suit.` : 'You have to follow the led suit as far as you can.';
+  const where = r.trick.format?.suit === 'T' ? `in trump (${trumpMembers(r.trump)})` : 'in the led suit';
+  return shapes ? `You have to follow with ${describeShapes(shapes)} ${where}.` : `You have to follow ${where} as far as you can.`;
+}
+
+/** What counts as trump, for prompts: "♥, any 2 or a joker". */
+export function trumpMembers(trump: Trump): string {
+  const number = trump.number === null ? null : levelLabel(trump.number);
+  if (trump.kind === 'noTrump') return number ? `any ${number} or a joker` : 'a joker';
+  return `${SUIT_SYMBOL[trump.suit]}, any ${number} or a joker`;
 }
 
 // ------------------------------------------------------------------ reducer
@@ -795,10 +806,30 @@ function finalize(s: TractorState): TractorState {
 }
 
 /** Hand sorted for display: by suit (trump last), then strength. */
+/**
+ * A hand in display order. Once trump is settled (the kitty is taken), trump —
+ * the trump suit, every trump-number card and the jokers — sorts as one suit,
+ * last. While bidding, every card stays with its printed suit, so suit lengths
+ * show (the leading bid's suit last, then the jokers); the UI marks the
+ * trump-number cards and jokers.
+ */
 export function sortedHand(state: TractorState, seat: number): Card[] {
   const r = state.round;
-  const trump: Trump = r.trump ?? displayTrump(state, seat);
-  return r.hands[seat]!.slice().sort((a, b) => compareCards(trump, a, b));
+  if (r.trump) {
+    const trump = r.trump;
+    return r.hands[seat]!.slice().sort((a, b) => compareCards(trump, a, b));
+  }
+  const lead = displayTrump(state, seat);
+  const last = lead.kind === 'standard' ? lead.suit : null;
+  const key = (c: Card) => (isJoker(c) ? 1000 + (c === 'BJ' ? 1 : 0) : biddingSuitOrder(last, cardSuit(c)!) * 100 + rankValue(cardRank(c)!));
+  return r.hands[seat]!.slice().sort((a, b) => key(a) - key(b));
+}
+
+/** Suit order while bidding: shengji's cycle ♣ ♦ ♠ ♥, starting after the leading bid's suit so that suit comes last (where trump will go). */
+function biddingSuitOrder(last: Suit | null, suit: Suit): number {
+  const cycle: Suit[] = ['C', 'D', 'S', 'H'];
+  const start = last === null ? 0 : (cycle.indexOf(last) + 1) % 4;
+  return (cycle.indexOf(suit) - start + 4) % 4;
 }
 
 /** Before trump is set: sort as if the leading bid stood (or no-trump at the bid level). */

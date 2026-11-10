@@ -1,4 +1,5 @@
-// The viewer's hand: sorted by suit with trump last, grouped with small
+// The viewer's hand: sorted by suit with trump last (while bidding, by
+// printed suit with the trump numbers and jokers marked), grouped with small
 // gaps, overlapped to fit the width (wrapping into extra rows when the hand
 // is big) and fanned slightly. Tap a card to select it, or press and drag
 // across several; on a focused card Enter / Space toggles it. Newly drawn
@@ -7,13 +8,15 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import type { Card } from '@/game/cards';
-import { effectiveSuit, type Trump } from '@/game/trump';
 import { CardView } from '../CardView';
 import { prefersReducedMotion, registerHand } from './flight';
 
 interface Props {
   cards: Card[];
-  trump: Trump;
+  /** The group a card sits in (a small gap between groups): its suit, or trump. */
+  groupOf: (card: Card) => string;
+  /** Cards to mark as trump. */
+  isTrumpCard: (card: Card) => boolean;
   selected: ReadonlySet<number>;
   /** Set to make the hand selectable. */
   onSelect?: (next: Set<number>) => void;
@@ -30,7 +33,7 @@ const SLIDE_MS = 340;
 /** The fan's widest tilt, in degrees. */
 const MAX_FAN = 6;
 
-export function Hand({ cards, trump, selected, onSelect, marked, markLabel }: Props) {
+export function Hand({ cards, groupOf, isTrumpCard, selected, onSelect, marked, markLabel }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(800);
   const [cardW, setCardW] = useState(72);
@@ -149,7 +152,7 @@ export function Hand({ cards, trump, selected, onSelect, marked, markLabel }: Pr
   const room = width - 16 - 2 * overhang;
   let rows = 1;
   const stepFor = (perRow: number, groups: number) => (room - cardW - groups * 10) / Math.max(1, perRow - 1);
-  const groupsIn = (list: number[]) => new Set(list.map((i) => effectiveSuit(trump, cards[i]!))).size - 1;
+  const groupsIn = (list: number[]) => new Set(list.map((i) => groupOf(cards[i]!))).size - 1;
   const all = cards.map((_, i) => i);
   while (rows < 4 && stepFor(Math.ceil(cards.length / rows), groupsIn(all)) < minStep) rows++;
   const perRow = Math.ceil(cards.length / rows);
@@ -175,7 +178,7 @@ export function Hand({ cards, trump, selected, onSelect, marked, markLabel }: Pr
           <div className="hand-row" key={ri}>
             {list.map((i, k) => {
               const prev = k > 0 ? list[k - 1]! : null;
-              const newGroup = prev !== null && effectiveSuit(trump, cards[prev]!) !== effectiveSuit(trump, cards[i]!);
+              const newGroup = prev !== null && groupOf(cards[prev]!) !== groupOf(cards[i]!);
               const marginLeft = k === 0 ? 0 : -(cardW - step) + (newGroup ? 10 : 0);
               const t = mid > 0 ? (k - mid) / mid : 0;
               const style = {
@@ -204,7 +207,7 @@ export function Hand({ cards, trump, selected, onSelect, marked, markLabel }: Pr
                     card={cards[i]!}
                     size="md"
                     selected={selected.has(i)}
-                    trump={effectiveSuit(trump, cards[i]!) === 'T'}
+                    trump={isTrumpCard(cards[i]!)}
                     onClick={
                       onSelect
                         ? (e) => {

@@ -167,14 +167,22 @@ button.card:hover { filter: brightness(1.03); }
 }
 .card-highlight { box-shadow: 0 0 0 2px var(--gold), 0 0 14px rgba(255, 210, 94, 0.5), 0 3px 8px rgba(0, 0, 0, 0.3); }
 .card-dim { filter: brightness(0.7) saturate(0.8); }
-/* Trump cards: a gold edge along the top, visible even on an overlapped sliver. */
+/* Trump cards: a soft gold ring, and a gold edge along the top that shows even on an overlapped sliver. */
+.card-trump::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px rgba(242, 185, 40, 0.85), inset 0 0 10px rgba(255, 210, 94, 0.35);
+  pointer-events: none;
+}
 .card-trump::after {
   content: '';
   position: absolute;
   left: 7%;
   right: 7%;
   top: 0;
-  height: 3px;
+  height: 4px;
   border-radius: 0 0 3px 3px;
   background: linear-gradient(90deg, #ffe48a, #f2b928);
   box-shadow: 0 0 6px rgba(242, 185, 40, 0.75);

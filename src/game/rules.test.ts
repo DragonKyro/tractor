@@ -16,7 +16,9 @@ import {
   friendCallProblems,
   IllegalAction,
   landlordToBe,
+  playProblemFor,
   scoringParams,
+  sortedHand,
   validBidsFor,
 } from './engine';
 import { advancePlayer, DEFAULT_SCORING, materialize, scoreRound, type AdvancementPolicy } from './scoring';
@@ -610,5 +612,73 @@ describe('winning a round, levelling up, winning the game', () => {
     expect(step('5', 2, true, 'defendPoints', 'NT', 'A').to).toBe('7');
     expect(step('5', 2, false, 'defendPoints', 'NT', 'A').to).toBe('5');
     expect(step('7', 2, true, 'defendPoints', 'NT', 'A').to).toBe('9');
+  });
+});
+
+// ------------------------------------------------------------------ trump is one suit
+
+describe('trump: the trump suit, every trump-number card and both jokers are one suit', () => {
+  // ♥ trump, 2s trump: seat 3 is landlord and leads, seat 0 follows.
+  function after(lead: Card[], follower: Card[]): TractorState {
+    const filler = ['4C', '6C', '9C', 'TC', '3D', '5D'];
+    let s = scenario({ hands: [follower, filler, filler, [...filler, ...lead, '2H']], landlord: 3, levels: ['2', '2', '2', '2'] });
+    s = act(s, bid(3, '2H'), pickUp(3), exchange(3, []));
+    return act(s, play(3, ...lead));
+  }
+  const ok = (lead: Card[], hand: Card[], cards: Card[]) => expect(playProblemFor(after(lead, hand), 0, cards)).toBeNull();
+  const refused = (lead: Card[], hand: Card[], cards: Card[]) => expect(playProblemFor(after(lead, hand), 0, cards)).not.toBeNull();
+
+  it('follows a trump-suit lead with a trump number of any suit, or a joker', () => {
+    ok(['5H'], ['2S', '3H', 'KC'], ['2S']);
+    ok(['5H'], ['2C', '3H', 'KC'], ['2C']);
+    ok(['5H'], ['2H', '3H', 'KC'], ['2H']);
+    ok(['5H'], ['LJ', '3H', 'KC'], ['LJ']);
+    ok(['5H'], ['BJ', '3H', 'KC'], ['BJ']);
+    ok(['5H', '5H'], ['2S', '2S', '3H', 'KC'], ['2S', '2S']);
+    ok(['5H', '5H'], ['2S', '2C', '3H', 'KC'], ['2S', '3H']);
+    // A 2 is trump, so it must be played on a trump lead before an off-suit card.
+    refused(['5H'], ['2S', 'KC'], ['KC']);
+    // Holding a trump pair (2♠2♠), a trump pair lead must be answered with a pair.
+    refused(['5H', '5H'], ['2S', '2S', '3H', 'KC'], ['2S', '3H']);
+  });
+
+  it('follows a trump-number or joker lead with the trump suit', () => {
+    ok(['2C'], ['3H', '2S', 'KC'], ['3H']);
+    ok(['LJ'], ['3H', 'KC'], ['3H']);
+    ok(['BJ'], ['2D', 'KC'], ['2D']);
+  });
+
+  it("doesn't count a trump number as its printed suit", () => {
+    // 2♠ is trump: on a ♠ lead, a spade has to be played while there is one.
+    refused(['5S'], ['2S', 'KS'], ['2S']);
+    ok(['5S'], ['2S', 'KS'], ['KS']);
+    ok(['5S'], ['2S', 'KC'], ['2S']);
+  });
+
+  it('ranks trump suit < trump number < trump-suit number < small joker < big joker, ties to the first played', () => {
+    const winner = (plays: Card[][]) => {
+      let s = scenario({ hands: plays.map((p, i) => (i === 0 ? [...p, '2H', 'KD'] : [...p, 'KD'])), landlord: 0, levels: ['2', '2', '2', '2'] });
+      s = act(s, bid(0, '2H'), pickUp(0), exchange(0, []));
+      for (let i = 0; i < 4; i++) s = act(s, play(i, ...plays[i]!));
+      return s.round.tricks[s.round.tricks.length - 1]!.winner;
+    };
+    expect(winner([['KH'], ['AH'], ['2C'], ['3H']])).toBe(2); // any 2 beats the trump-suit ace
+    expect(winner([['AH'], ['2S'], ['2C'], ['2D']])).toBe(1); // off-suit 2s tie: the first one wins
+    expect(winner([['2D'], ['2S'], ['2C'], ['KH']])).toBe(0); // ... including the lead
+    expect(winner([['AH'], ['2S'], ['2H'], ['2C']])).toBe(2); // the trump-suit 2 beats the other 2s
+    expect(winner([['2H'], ['LJ'], ['3H'], ['AH']])).toBe(1); // the small joker beats the trump-suit 2
+    expect(winner([['2H'], ['LJ'], ['BJ'], ['AH']])).toBe(2); // the big joker beats everything
+    expect(winner([['5S'], ['2C'], ['LJ'], ['3H']])).toBe(2); // trumping in: the best trump wins
+  });
+
+  it('sorts a hand by printed suit while bidding and with trump as one suit once the kitty is taken', () => {
+    const hand: Card[] = ['BJ', '2H', '9S', '2S', 'KH', '3C', 'LJ', '5D', '2C', 'AS'];
+    let s = scenario({ hands: [hand, ['4C'], ['4D'], ['4S']], landlord: 0, levels: ['2', '2', '2', '2'] });
+    s = act(s, bid(0, '2H'));
+    // Bidding (♥ leads): every card in its printed suit — ♣ ♦ ♠ ♥ — then the jokers.
+    expect(sortedHand(s, 0)).toEqual(['2C', '3C', '5D', '2S', '9S', 'AS', '2H', 'KH', 'LJ', 'BJ']);
+    s = act(s, pickUp(0));
+    // Trump settled: ♥ suit, then the off-suit 2s, the ♥2 and the jokers, all together at the end.
+    expect(sortedHand(s, 0)).toEqual(['3C', '5D', '9S', 'AS', 'KH', '2S', '2C', '2H', 'LJ', 'BJ']);
   });
 });

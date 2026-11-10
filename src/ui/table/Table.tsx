@@ -4,7 +4,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { activeSeat, attackerPointsSoFar, bidText, displayTrump, ordinalText, scoringParams, sortedHand } from '@/game/engine';
-import { cardLabel } from '@/game/cards';
+import { cardLabel, cardRank, cardSuit, isJoker, type Card } from '@/game/cards';
+import { effectiveSuit, isTrump } from '@/game/trump';
 import { materialize } from '@/game/scoring';
 import type { Action, TractorState } from '@/game/types';
 import { CardRow } from '../CardView';
@@ -46,7 +47,11 @@ interface Props {
 export function Table({ state, viewer, dispatch, summary, automation = null, showAllHands = false, canShowAllHands = false }: Props) {
   const r = state.round;
   const hand = useMemo(() => (viewer !== null ? sortedHand(state, viewer) : []), [state, viewer]);
-  const trump = r.trump ?? displayTrump(state, viewer ?? 0);
+  // Trump is settled once the kitty is taken; until then the hand stays in printed suits (so suit lengths show
+  // for overcalling) with the trump numbers and jokers marked.
+  const trumpNumber = (r.trump ?? displayTrump(state, viewer ?? 0)).number;
+  const groupOf = (c: Card) => (r.trump ? effectiveSuit(r.trump, c) : isJoker(c) ? 'J' : cardSuit(c)!);
+  const isTrumpCard = (c: Card) => (r.trump ? isTrump(r.trump, c) : isJoker(c) || (trumpNumber !== null && cardRank(c) === trumpNumber));
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const handKey = `${viewer}|${r.number}|${r.stage}|${hand.join(',')}`;
   useEffect(() => setSelected(new Set()), [handKey]);
@@ -83,7 +88,7 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
               dispatch={send}
               automation={automation}
             />
-            <Hand cards={hand} trump={trump} selected={selected} onSelect={canSelect ? setSelected : undefined} marked={marked} markLabel="kitty" />
+            <Hand cards={hand} groupOf={groupOf} isTrumpCard={isTrumpCard} selected={selected} onSelect={canSelect ? setSelected : undefined} marked={marked} markLabel="kitty" />
           </>
         )}
         {viewer === null && r.stage !== 'roundOver' && (

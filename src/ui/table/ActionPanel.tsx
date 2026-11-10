@@ -19,11 +19,13 @@ import {
   ordinalText,
   playProblemFor,
   tractorRequirements,
+  trumpMembers,
   validBidsFor,
 } from '@/game/engine';
 import { describeShapes, describeUnit, formatSize, possibleFormats, requiredShapes } from '@/game/format';
 import type { Action, FriendCall, TractorState } from '@/game/types';
 import { usePrefs, type BidWindow, type DealSpeed } from '@/store/prefsStore';
+import { SuitText } from '../SuitText';
 import type { Automation } from './Table';
 
 interface Props {
@@ -161,7 +163,7 @@ export function ActionPanel({ state, viewer, hand, selected, setSelected, dispat
     const done = viewer !== null && canSayDoneBidding(state, viewer);
     return (
       <div className="action-panel">
-        <div className="action-prompt">{prompt}</div>
+        <div className="action-prompt"><SuitText text={prompt} /></div>
         <div className="action-buttons">
           {myDraw && <DrawButton onDraw={() => act({ type: 'draw', seat: viewer! })} />}
           {bids.map((b) => (
@@ -237,12 +239,16 @@ export function ActionPanel({ state, viewer, hand, selected, setSelected, dispat
   else {
     const what = format.units.map(describeUnit).join(' + ');
     prompt = `Your turn: play ${need} card${need === 1 ? '' : 's'} (led: ${what}).`;
-    if (required && required.length) prompt += ` You must include ${describeShapes(required)} of the led suit.`;
+    if (required && required.length) {
+      prompt += format.suit === 'T'
+        ? ` You must include ${describeShapes(required)} of trump (${trumpMembers(r.trump!)}).`
+        : ` You must include ${describeShapes(required)} of the led suit.`;
+    }
   }
 
   return (
     <div className="action-panel">
-      <div className="action-prompt">{prompt}</div>
+      <div className="action-prompt"><SuitText text={prompt} /></div>
       <div className="action-buttons">
         <button onClick={playIt} disabled={!canPlay} title="Enter">
           Play{picked.length ? ` ${picked.length}` : ''}
