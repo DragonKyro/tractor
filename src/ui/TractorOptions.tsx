@@ -118,6 +118,13 @@ export function TractorOptions({ config, seats, onChange }: Props) {
         </span>
       </Row>
 
+      <Row label="Hide the defenders' points" hint="Keep count yourself: their captured points show at the end of the round.">
+        <input type="checkbox" checked={config.hideLandlordPoints} onChange={(e) => set('hideLandlordPoints', e.target.checked)} />
+      </Row>
+      <Row label="Hide played cards" hint="The log says who played how many cards, not which.">
+        <input type="checkbox" checked={config.hidePlayedCards} onChange={(e) => set('hidePlayedCards', e.target.checked)} />
+      </Row>
+
       <button type="button" className="secondary tiny opt-advanced-toggle" onClick={() => setAdvanced((v) => !v)}>
         {advanced ? '▾ Fewer options' : '▸ More options (house rules)'}
       </button>

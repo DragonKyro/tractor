@@ -9,16 +9,14 @@ import { defaultConfig, type TractorConfig } from '@/game/config';
 import { applyAction, createInitialState } from '@/game/engine';
 import type { TractorState } from '@/game/types';
 import { nextAutomatedStep } from './driver';
-import type { AiLevel } from './index';
 
-export function aiSeats(n: number, levels: AiLevel[] = []): Seat[] {
+export function aiSeats(n: number): Seat[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `ai-${i + 1}`,
     name: `AI ${i + 1}`,
     color: SEAT_COLORS[i % SEAT_COLORS.length]!,
     isAI: true,
     isLocal: true,
-    aiLevel: levels[i % Math.max(1, levels.length)] ?? 'normal',
   }));
 }
 

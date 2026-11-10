@@ -96,12 +96,16 @@ describe.skipIf(!LIVE)('online tractor on the real Firebase project', () => {
       const s = host.state()!;
       const auto = host.driver.nextAutomatedStep(s, (seat) => s.seats[seat]!.isAI);
       const before = host.state()!.logCount;
+      const drawer = host.engine.drawingSeat(s);
       if (auto) {
         expect(host.dispatch(auto.action, true)).toBeNull();
+      } else if (drawer !== null) {
+        const owner = [host, guest].find((d) => d.uuid === s.seats[drawer]!.id)!;
+        expect(owner.dispatch({ type: 'draw', seat: drawer })).toBeNull();
       } else {
         const seat = host.engine.activeSeat(s)!;
         const owner = [host, guest].find((d) => d.uuid === s.seats[seat]!.id)!;
-        const a = owner.ai.chooseAIAction(owner.state()!, seat, 'normal')!;
+        const a = owner.ai.chooseAIAction(owner.state()!, seat)!;
         expect(owner.dispatch(a)).toBeNull();
       }
       await until(() => {

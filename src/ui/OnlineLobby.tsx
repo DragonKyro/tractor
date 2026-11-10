@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import { MAX_PLAYERS } from '@/game/config';
 import { lobbyConfig, lobbyStartProblem, useNetworkStore } from '@/store/networkStore';
 import { roomLink } from '@/net/roomLink';
-import { AiLevelSelect, ChatInput, ColorSwatchPicker, NameInput, RulesModal } from './lobbyParts';
+import { ChatInput, ColorSwatchPicker, NameInput, RulesModal } from './lobbyParts';
 import { RulesText } from './Rules';
 import { TractorOptions } from './TractorOptions';
 
@@ -111,7 +111,6 @@ export function OnlineLobby() {
                   {mine && <span className="online-tag">you</span>}
                   {s.id === lobby.hostUuid && <span className="online-tag">host</span>}
                   {s.isAI && <span className="online-tag">AI</span>}
-                  <AiLevelSelect seat={s} disabled={!isHost} onChange={(aiLevel) => net().editSeat(s.id, { aiLevel })} />
                   {offline && <span className="online-tag offline">offline</span>}
                 </span>
                 {isHost && (

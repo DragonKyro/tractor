@@ -14,7 +14,7 @@ import { useGameStore, type MatchSetup } from '@/store/gameStore';
 import { useNetworkStore, warmUpNetwork } from '@/store/networkStore';
 import { getOrCreateUuid } from '@/net/identity';
 import { isOnlineConfigured } from '@/net/firebaseConfig';
-import { AiLevelSelect, ColorSwatchPicker, RulesModal } from './lobbyParts';
+import { ColorSwatchPicker, RulesModal } from './lobbyParts';
 import { RulesText } from './Rules';
 import { TractorOptions } from './TractorOptions';
 
@@ -127,7 +127,6 @@ export function LocalLobby({ initial, onBack, onStart }: Props) {
                 <input type="checkbox" checked={s.isAI} onChange={(e) => updateSeat(s.id, { isAI: e.target.checked })} />
                 AI
               </label>
-              <AiLevelSelect seat={s} onChange={(aiLevel) => updateSeat(s.id, { aiLevel })} />
               <span className="seat-move">
                 <button className="secondary tiny" disabled={i === 0} onClick={() => moveSeat(i, -1)} aria-label="Move up">↑</button>
                 <button className="secondary tiny" disabled={i === seats.length - 1} onClick={() => moveSeat(i, 1)} aria-label="Move down">↓</button>

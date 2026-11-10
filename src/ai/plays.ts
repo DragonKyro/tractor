@@ -1,7 +1,6 @@
 // Legal-play candidates for a seat, built from its own hand only: leads
 // (single units, plus "boss" throws) and follows (matches of the required
-// shapes with a choice of fill). The heuristic AI scores these; a trained
-// network can score the same list (candidate-based action space).
+// shapes with a choice of fill). The learned AI scores these (src/ai/nn/decision.ts).
 
 import { cardPoints, countCards, removeCards, type Card } from '@/game/cards';
 import {
@@ -28,10 +27,6 @@ export function tractorReq(obs: Observation): TractorRequirements {
 export function cardCost(trump: Trump, card: Card): number {
   const t = effectiveSuit(trump, card) === 'T';
   return (t ? 20 : 0) + strength(trump, card) + cardPoints(card) * 0.6;
-}
-
-export function playCost(trump: Trump, cards: readonly Card[]): number {
-  return cards.reduce((n, c) => n + cardCost(trump, c), 0);
 }
 
 function bySuit(trump: Trump, hand: readonly Card[]): Map<EffSuit, Card[]> {
@@ -82,7 +77,23 @@ export function unitIsBoss(trump: Trump, unit: TrickUnit, unseen: Map<Card, numb
   return true;
 }
 
-/** Legal leads to consider: single units, and per suit a throw of all its boss units. */
+/** Unseen copies that beat `card` in its own suit (any one of them could take a single). */
+export function unseenAbove(trump: Trump, card: Card, unseen: Map<Card, number>, copies = 1): number {
+  const suit = effectiveSuit(trump, card);
+  let n = 0;
+  for (const [c, k] of unseen) {
+    if (k >= copies && effectiveSuit(trump, c) === suit && compareEffective(trump, c, card) > 0) n += k;
+  }
+  return n;
+}
+
+/**
+ * Legal leads to consider: single units, and per suit a throw of all its boss
+ * units, the throw without its smallest boss unit and with only its two
+ * largest (to keep control of the suit), and a riskier throw adding the
+ * suit's highest other single when at most two unseen cards beat it (it fails
+ * if an opponent holds one; the network weighs that from what it has seen).
+ */
 export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Card[][] {
   const trump = obs.trump!;
   const units = leadUnits(obs);
@@ -98,11 +109,11 @@ export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Car
     const s = effectiveSuit(trump, unitCards(u)[0]!);
     bySuitUnits.set(s, [...(bySuitUnits.get(s) ?? []), u]);
   }
-  for (const list of bySuitUnits.values()) {
+  const variants: Card[][] = [];
+  for (const [suit, list] of bySuitUnits) {
     list.sort((a, b) => unitCards(b).length - unitCards(a).length);
     let pool = obs.hand.slice();
-    const picked: Card[] = [];
-    let parts = 0;
+    const chosen: Card[][] = [];
     for (const u of list) {
       const cards = unitCards(u);
       try {
@@ -110,15 +121,30 @@ export function leadCandidates(obs: Observation, unseen: Map<Card, number>): Car
       } catch {
         continue;
       }
-      picked.push(...cards);
-      parts++;
+      chosen.push(cards);
     }
-    if (parts >= 2) out.set(key(picked), picked);
+    const picked = chosen.flat();
+    if (chosen.length >= 2) out.set(key(picked), picked);
+    if (chosen.length >= 3) {
+      variants.push(chosen.slice(0, -1).flat());
+      variants.push(chosen.slice(0, 2).flat());
+    }
+    // Near-boss: add the suit's highest card that isn't already in the throw.
+    const rest = pool.filter((c) => effectiveSuit(trump, c) === suit).sort((a, b) => compareCards(trump, b, a));
+    const top = rest[0];
+    if (top && chosen.length >= 1 && unseenAbove(trump, top, unseen) <= 2) variants.push([...picked, top]);
   }
+  for (const v of variants) if (!out.has(key(v))) out.set(key(v), v);
   return [...out.values()];
 }
 
-/** Legal follows to `format`: several matchings of the required shapes, each with low / high / point fills. */
+/**
+ * Legal follows to `format`: several matchings of the required shapes, each
+ * with low / high / point fills; then, wherever the rules leave a choice,
+ * every distinct card when one card is free to choose (any discard when void,
+ * any card of the suit when following a single), a cheapest fill taken from
+ * each suit first, and a fill that keeps pairs. The first `limit`, in that order.
+ */
 export function followCandidates(obs: Observation, format: TrickFormat, limit = 24): Card[][] {
   const trump = obs.trump!;
   const hand = obs.hand;
@@ -129,52 +155,78 @@ export function followCandidates(obs: Observation, format: TrickFormat, limit = 
   const add = (cards: Card[]) => {
     if (cards.length === need) out.set(key(cards), cards);
   };
+  const cost = (a: Card, b: Card) => cardCost(trump, a) - cardCost(trump, b);
 
-  const fills = (pool: Card[], n: number): Card[][] => {
+  const narrowFills = (pool: Card[], n: number): Card[][] => {
     if (n <= 0) return [[]];
-    const low = pool.slice().sort((a, b) => cardCost(trump, a) - cardCost(trump, b));
-    const pts = pool.slice().sort((a, b) => cardPoints(b) - cardPoints(a) || cardCost(trump, a) - cardCost(trump, b));
-    const high = pool.slice().sort((a, b) => cardCost(trump, b) - cardCost(trump, a));
+    const low = pool.slice().sort(cost);
+    const pts = pool.slice().sort((a, b) => cardPoints(b) - cardPoints(a) || cost(a, b));
+    const high = pool.slice().sort((a, b) => cost(b, a));
     return [low.slice(0, n), pts.slice(0, n), high.slice(0, n)];
   };
-
-  if (inSuit.length <= need) {
-    const rest = need - inSuit.length;
-    for (const f of fills(others, rest)) add([...inSuit, ...f]);
-    // Ruffing: when void, trump in the lead's shape can win.
-    if (inSuit.length === 0 && format.suit !== 'T') {
-      const trumps = countCards(others.filter((c) => effectiveSuit(trump, c) === 'T'));
-      const shapes = format.units.map(unitShape);
-      for (const m of findFormatMatches(trump, trumps, shapes, { limit: 8 })) {
-        add(m.flatMap((p) => p.flatMap(([c, k]) => Array<Card>(k).fill(c))));
+  const wideFills = (pool: Card[], n: number): Card[][] => {
+    if (n <= 0) return [[]];
+    if (n === 1) return [...new Set(pool)].sort(cost).map((c) => [c]);
+    const low = pool.slice().sort(cost);
+    const res: Card[][] = [];
+    const groups = bySuit(trump, pool);
+    for (const cards of groups.values()) {
+      const first = cards.slice().sort(cost).slice(0, n);
+      let rest = pool.slice();
+      try {
+        rest = removeCards(rest, first);
+      } catch {
+        continue;
       }
+      res.push([...first, ...rest.sort(cost).slice(0, n - first.length)]);
     }
-  } else {
+    const counts = countCards(pool);
+    const loose = (c: Card) => ((counts.get(c) ?? 0) >= 2 ? 1 : 0);
+    res.push(low.slice().sort((a, b) => loose(a) - loose(b) || cost(a, b)).slice(0, n));
+    return res;
+  };
+
+  const generate = (fills: (pool: Card[], n: number) => Card[][]) => {
+    if (inSuit.length <= need) {
+      const rest = need - inSuit.length;
+      for (const f of fills(others, rest)) add([...inSuit, ...f]);
+      // Ruffing: when void, trump in the lead's shape can win.
+      if (inSuit.length === 0 && format.suit !== 'T') {
+        const trumps = countCards(others.filter((c) => effectiveSuit(trump, c) === 'T'));
+        const shapes = format.units.map(unitShape);
+        for (const m of findFormatMatches(trump, trumps, shapes, { limit: 8 })) {
+          add(m.flatMap((p) => p.flatMap(([c, k]) => Array<Card>(k).fill(c))));
+        }
+      }
+      return;
+    }
     const req = requiredShapes(trump, format, hand, obs.config.trickDrawPolicy);
     if (!req) {
       for (const f of fills(inSuit, need)) add(f);
-    } else {
-      const counts = countCards(inSuit);
-      const filter =
-        obs.config.trickDrawPolicy === 'longerTuplesProtected' || obs.config.trickDrawPolicy === 'longerTuplesProtectedAndOnlyDrawTractorOnTractor'
-          ? (c: Card, k: number) => (counts.get(c) ?? 0) <= k
-          : undefined;
-      const matches = findFormatMatches(trump, counts, req, { filter, limit: 40 });
-      // Highest-first comes first; also try the last (lowest) few.
-      const picks = [...matches.slice(0, 4), ...matches.slice(-4)];
-      for (const m of picks) {
-        const core = m.flatMap((p) => p.flatMap(([c, k]) => Array<Card>(k).fill(c)));
-        let rest: Card[];
-        try {
-          rest = removeCards(inSuit, core);
-        } catch {
-          continue;
-        }
-        for (const f of fills(rest, need - core.length)) add([...core, ...f]);
-      }
+      return;
     }
-  }
+    const counts = countCards(inSuit);
+    const filter =
+      obs.config.trickDrawPolicy === 'longerTuplesProtected' || obs.config.trickDrawPolicy === 'longerTuplesProtectedAndOnlyDrawTractorOnTractor'
+        ? (c: Card, k: number) => (counts.get(c) ?? 0) <= k
+        : undefined;
+    const matches = findFormatMatches(trump, counts, req, { filter, limit: 40 });
+    // Highest-first comes first; also try the last (lowest) few.
+    const picks = [...matches.slice(0, 4), ...matches.slice(-4)];
+    for (const m of picks) {
+      const core = m.flatMap((p) => p.flatMap(([c, k]) => Array<Card>(k).fill(c)));
+      let rest: Card[];
+      try {
+        rest = removeCards(inSuit, core);
+      } catch {
+        continue;
+      }
+      for (const f of fills(rest, need - core.length)) add([...core, ...f]);
+    }
+  };
 
+  generate(narrowFills);
+  generate(wideFills);
   const legal = [...out.values()].filter((cards) => isLegalFollow(trump, format, hand, cards, obs.config.trickDrawPolicy));
   if (legal.length > 0) return legal.slice(0, limit);
   return [bruteForceFollow(obs, format, inSuit, others, need)];

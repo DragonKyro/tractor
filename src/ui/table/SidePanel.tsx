@@ -5,16 +5,21 @@ import { useEffect, useRef, useState } from 'react';
 import { cardLabel, totalPoints } from '@/game/cards';
 import { ordinalText } from '@/game/engine';
 import type { TractorState } from '@/game/types';
-import { usePrefs, type AiSpeed } from '@/store/prefsStore';
-import { levelText, roleOf } from './labels';
+import { usePrefs, type AiSpeed, type BidWindow, type DealSpeed } from '@/store/prefsStore';
+import { levelText, logLine, pointsHidden, roleOf } from './labels';
 
 type Tab = 'players' | 'log' | 'settings';
 
-export function SidePanel({ state }: { state: TractorState }) {
+export function SidePanel({ state, canShowAllHands = false, onClose }: { state: TractorState; canShowAllHands?: boolean; onClose?: () => void }) {
   const [tab, setTab] = useState<Tab>('players');
   return (
     <aside className="side-panel">
       <div className="side-tabs" role="tablist">
+        {onClose && (
+          <button className="side-tab side-close" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        )}
         {(['players', 'log', 'settings'] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'side-tab active' : 'side-tab'} onClick={() => setTab(t)}>
             {t === 'players' ? 'Table' : t === 'log' ? 'Log' : 'Settings'}
@@ -23,7 +28,7 @@ export function SidePanel({ state }: { state: TractorState }) {
       </div>
       {tab === 'players' && <Players state={state} />}
       {tab === 'log' && <Log state={state} />}
-      {tab === 'settings' && <Settings />}
+      {tab === 'settings' && <Settings canShowAllHands={canShowAllHands} />}
     </aside>
   );
 }
@@ -54,7 +59,9 @@ function Players({ state }: { state: TractorState }) {
                 </td>
                 <td>{levelText(state.levels[i]!)}</td>
                 <td>{ROLE_LABEL[role]}</td>
-                <td>{totalPoints(r.captured[i]!) || ''}</td>
+                <td title={pointsHidden(state, i) ? 'Hidden until the round ends' : undefined}>
+                  {pointsHidden(state, i) ? '—' : totalPoints(r.captured[i]!) || ''}
+                </td>
               </tr>
             );
           })}
@@ -107,30 +114,59 @@ function Log({ state }: { state: TractorState }) {
       {state.log.slice(-120).map((e) => (
         <div key={e.n} className={`log-row log-${e.kind}`}>
           {e.seat !== undefined && <span className="seat-dot" style={{ background: state.seats[e.seat]?.color }} />}
-          {e.text}
+          {logLine(state, e)}
         </div>
       ))}
     </div>
   );
 }
 
-function Settings() {
-  const fourColor = usePrefs((s) => s.fourColor);
-  const aiSpeed = usePrefs((s) => s.aiSpeed);
-  const set = usePrefs((s) => s.set);
+function Settings({ canShowAllHands }: { canShowAllHands: boolean }) {
+  const p = usePrefs();
   return (
     <div className="side-body settings">
       <label className="opt-inline">
-        <input type="checkbox" checked={fourColor} onChange={(e) => set({ fourColor: e.target.checked })} /> Four-color suits
+        AI speed
+        <select value={p.aiSpeed} onChange={(e) => p.set({ aiSpeed: e.target.value as AiSpeed })}>
+          <option value="slow">Slow</option>
+          <option value="normal">Normal</option>
+          <option value="fast">Fast</option>
+          <option value="instant">Instant</option>
+        </select>
       </label>
       <label className="opt-inline">
-        AI / deal speed
-        <select value={aiSpeed} onChange={(e) => set({ aiSpeed: e.target.value as AiSpeed })}>
+        Deal speed
+        <select value={p.dealSpeed} onChange={(e) => p.set({ dealSpeed: e.target.value as DealSpeed })}>
           <option value="slow">Slow</option>
           <option value="normal">Normal</option>
           <option value="fast">Fast</option>
         </select>
       </label>
+      <label className="opt-inline" title="After the deal, how long an AI waits before taking the kitty, so you can still overcall">
+        Time to overcall after the deal
+        <select value={p.bidWindow} onChange={(e) => p.set({ bidWindow: e.target.value as BidWindow })}>
+          <option value="short">3 s</option>
+          <option value="normal">6 s</option>
+          <option value="long">12 s</option>
+        </select>
+      </label>
+      <label className="opt-inline">
+        <input type="checkbox" checked={p.autoDraw} onChange={(e) => p.set({ autoDraw: e.target.checked })} /> Draw my cards automatically
+      </label>
+      <label className="opt-inline">
+        <input type="checkbox" checked={p.sounds} onChange={(e) => p.set({ sounds: e.target.checked })} /> Sounds
+      </label>
+      <label className="opt-inline">
+        <input type="checkbox" checked={p.fourColor} onChange={(e) => p.set({ fourColor: e.target.checked })} /> Four-color suits
+      </label>
+      {canShowAllHands && (
+        <label className="opt-inline">
+          <input type="checkbox" checked={p.showAllHands} onChange={(e) => p.set({ showAllHands: e.target.checked })} /> Show all hands (watching AIs)
+        </label>
+      )}
+      <p className="lobby-hint">
+        Keys: Enter plays / confirms, Esc clears, H hints, D or Space draws. Drag across cards to select several.
+      </p>
       <p className="lobby-hint">Settings are kept on this device only.</p>
     </div>
   );

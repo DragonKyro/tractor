@@ -133,12 +133,11 @@ describe('full AI matches', () => {
     { name: '8p tractor, 4 decks', n: 8, rounds: 3 },
     { name: '6p tractor, 2 decks, explicit kitty, power penalty', n: 6, config: { numDecks: 2, kittySize: 6, kittyPenalty: 'power', throwPenalty: 'tenPointsPerAttempt' }, rounds: 4 },
     { name: '4p finding friends, NT max rank, highest-card throw evaluation', n: 4, config: { gameMode: 'findingFriends', maxRank: 'NT', throwEvaluationPolicy: 'highest' }, rounds: 6 },
-    { name: '7p finding friends, easy AIs, higher-suit bidding', n: 7, config: { bidPolicy: 'jokerOrHigherSuit', jokerBidPolicy: 'bothNumDecks' }, rounds: 3 },
+    { name: '7p finding friends, higher-suit bidding', n: 7, config: { bidPolicy: 'jokerOrHigherSuit', jokerBidPolicy: 'bothNumDecks' }, rounds: 3 },
   ];
   for (const c of cases) {
     it(c.name, () => {
-      const levels = c.name.includes('easy') ? (['easy'] as const) : (['normal', 'easy'] as const);
-      const res = simulateMatch({ seats: aiSeats(c.n, [...levels]), config: c.config, seed: c.n * 31 + 7, maxRounds: c.rounds ?? 40 });
+      const res = simulateMatch({ seats: aiSeats(c.n), config: c.config, seed: c.n * 31 + 7, maxRounds: c.rounds ?? 40 });
       expect(res.rounds).toBeGreaterThan(0);
       if (!c.rounds) expect(res.finished).toBe(true);
       for (const r of res.state.history) {

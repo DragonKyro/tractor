@@ -46,6 +46,16 @@ export interface Observation {
   tricks: CompletedTrick[];
   /** Points each seat has captured. */
   capturedPoints: number[];
+  /** Throw penalties per seat. */
+  penalties: number[];
+  /** Cards taken out of the decks before the deal (public). */
+  removed: Card[];
+  /** Live bidding after the deal: seats that said they have no more bids. */
+  bidDone: number[];
+  dealer: number;
+  /** Turn bidding: whose turn and how many passes in a row. */
+  bidTurn: number | null;
+  passes: number;
   /** Whose decision the round waits on. */
   active: number | null;
   /** What this seat may do right now. */
@@ -90,6 +100,12 @@ export function observe(state: TractorState, seat: number): Observation {
     trick: r.trick,
     tricks: r.tricks,
     capturedPoints: r.captured.map(totalPoints),
+    penalties: r.penalties.slice(),
+    removed: r.removed.slice(),
+    bidDone: r.bidDone.slice(),
+    dealer: r.dealer,
+    bidTurn: r.bidTurn,
+    passes: r.passes,
     active,
     can: {
       bid: validBidsFor(state, seat),
@@ -112,6 +128,7 @@ export function unseenCounts(obs: Observation): Map<Card, number> {
   if (obs.trick) for (const p of obs.trick.plays) p.cards.forEach(take);
   obs.kitty?.forEach(take);
   obs.revealedKitty.forEach(take);
+  obs.removed.forEach(take);
   return counts;
 }
 
@@ -127,22 +144,4 @@ export function knownVoids(obs: Observation): Array<Set<EffSuit>> {
     }
   }
   return voids;
-}
-
-/** Is `other` known to be on this seat's side? (Unknown friends count as not.) */
-export function isPartner(obs: Observation, other: number): boolean {
-  if (other === obs.seat) return true;
-  const mine = obs.landlordTeam.includes(obs.seat);
-  const theirs = obs.landlordTeam.includes(other);
-  if (obs.rules.gameMode === 'tractor') return mine === theirs;
-  // Finding friends: the landlord team is only partly known until every friend is out.
-  const allKnown = obs.friends.every((f) => f.seat !== null);
-  if (mine && theirs) return true;
-  if (!mine && !theirs) return allKnown || !iMightBeFriend(obs);
-  return false;
-}
-
-/** Finding friends: this seat holds a called card that may still make it a friend. */
-export function iMightBeFriend(obs: Observation): boolean {
-  return obs.friends.some((f) => f.seat === null && obs.hand.includes(f.card));
 }

@@ -1,24 +1,33 @@
 // The in-game view. Gets the state, which seat's hand to show (null for a
-// spectator or a pass-the-device screen) and dispatch; never reads the
+// spectator or a pass-the-device screen) and dispatch; never reads the game
 // stores itself, so hot-seat / online / spectating all render the same way.
 
 import { useEffect, useMemo, useState } from 'react';
-import { activeSeat, attackerPointsSoFar, displayTrump, scoringParams, sortedHand } from '@/game/engine';
+import { activeSeat, attackerPointsSoFar, bidText, displayTrump, ordinalText, scoringParams, sortedHand } from '@/game/engine';
+import { cardLabel } from '@/game/cards';
 import { materialize } from '@/game/scoring';
 import type { Action, TractorState } from '@/game/types';
+import { CardRow } from '../CardView';
 import { ActionPanel, indicesOf } from './ActionPanel';
 import { Felt } from './Felt';
 import { Hand } from './Hand';
 import { RoundSummary } from './RoundSummary';
 import { SidePanel } from './SidePanel';
 import { levelText, trumpParts } from './labels';
-import { bidText } from '@/game/engine';
 
 export interface SummaryControls {
   onNextRound?: () => void;
   onPlayAgain?: () => void;
   onLobby?: () => void;
+  onReview?: (kind: 'stats' | 'replay') => void;
   waitingText?: string;
+}
+
+/** A pending automated step the table can count down to (known on the driving device). */
+export interface Automation {
+  kind: 'bidWindow' | 'handoff';
+  firesAt: number;
+  seat: number | null;
 }
 
 interface Props {
@@ -26,9 +35,13 @@ interface Props {
   viewer: number | null;
   dispatch: (a: Action) => string | null;
   summary: SummaryControls;
+  automation?: Automation | null;
+  /** Watch mode (all-AI table): every hand face up. */
+  showAllHands?: boolean;
+  canShowAllHands?: boolean;
 }
 
-export function Table({ state, viewer, dispatch, summary }: Props) {
+export function Table({ state, viewer, dispatch, summary, automation = null, showAllHands = false, canShowAllHands = false }: Props) {
   const r = state.round;
   const hand = useMemo(() => (viewer !== null ? sortedHand(state, viewer) : []), [state, viewer]);
   const trump = r.trump ?? displayTrump(state, viewer ?? 0);
@@ -37,6 +50,7 @@ export function Table({ state, viewer, dispatch, summary }: Props) {
   useEffect(() => setSelected(new Set()), [handKey]);
   const [hideSummary, setHideSummary] = useState(false);
   useEffect(() => setHideSummary(false), [r.number, r.stage]);
+  const [sideOpen, setSideOpen] = useState(false);
 
   const active = activeSeat(state);
   const canSelect = viewer !== null && ((r.stage === 'play' && active === viewer) || (r.stage === 'exchange' && r.landlord === viewer));
@@ -45,27 +59,34 @@ export function Table({ state, viewer, dispatch, summary }: Props) {
     [r.stage, r.landlord, r.dealtKitty, hand, viewer],
   );
 
-  function toggle(i: number) {
-    const next = new Set(selected);
-    if (next.has(i)) next.delete(i);
-    else next.add(i);
-    setSelected(next);
-  }
-
   return (
-    <div className="table-layout">
+    <div className={`table-layout${sideOpen ? ' side-open' : ''}`}>
       <div className="table-main">
-        <StatusBar state={state} />
+        <StatusBar state={state} onToggleSide={() => setSideOpen((v) => !v)} />
+        <TeamBanner state={state} viewer={viewer} />
         <Felt state={state} bottom={viewer ?? 0} />
         {viewer !== null && (
           <>
-            <ActionPanel state={state} viewer={viewer} hand={hand} selected={selected} setSelected={setSelected} dispatch={dispatch} />
-            <Hand cards={hand} trump={trump} selected={selected} onToggle={canSelect ? toggle : undefined} marked={marked} markLabel="kitty" />
+            <ActionPanel
+              state={state}
+              viewer={viewer}
+              hand={hand}
+              selected={selected}
+              setSelected={setSelected}
+              dispatch={dispatch}
+              automation={automation}
+            />
+            <Hand cards={hand} trump={trump} selected={selected} onSelect={canSelect ? setSelected : undefined} marked={marked} markLabel="kitty" />
           </>
         )}
-        {viewer === null && r.stage !== 'roundOver' && <div className="action-panel"><div className="action-prompt">Watching.</div></div>}
+        {viewer === null && r.stage !== 'roundOver' && (
+          <div className="action-panel">
+            <div className="action-prompt">Watching.{canShowAllHands && !showAllHands ? ' Turn on “Show all hands” in Settings to see every hand.' : ''}</div>
+          </div>
+        )}
+        {showAllHands && <AllHands state={state} />}
       </div>
-      <SidePanel state={state} />
+      <SidePanel state={state} canShowAllHands={canShowAllHands} onClose={() => setSideOpen(false)} />
       {r.stage === 'roundOver' && !hideSummary && <RoundSummary state={state} {...summary} onHide={() => setHideSummary(true)} />}
       {r.stage === 'roundOver' && hideSummary && (
         <button className="summary-reopen" onClick={() => setHideSummary(false)}>Show the round's result</button>
@@ -74,7 +95,7 @@ export function Table({ state, viewer, dispatch, summary }: Props) {
   );
 }
 
-function StatusBar({ state }: { state: TractorState }) {
+function StatusBar({ state, onToggleSide }: { state: TractorState; onToggleSide: () => void }) {
   const r = state.round;
   const t = trumpParts(r.trump);
   const m = materialize(scoringParams(state.config), state.rules.numDecks, state.rules.numDecks * 100);
@@ -116,6 +137,72 @@ function StatusBar({ state }: { state: TractorState }) {
           Trick {r.tricks.length + 1} · {r.hands.reduce((n, h) => Math.max(n, h.length), 0)} left
         </span>
       )}
+      <button className="secondary tiny side-toggle" onClick={onToggleSide} aria-label="Table, log and settings">☰</button>
+    </div>
+  );
+}
+
+/** Who's with whom, from the viewer's side of the table (and what a held friend card means). */
+function TeamBanner({ state, viewer }: { state: TractorState; viewer: number | null }) {
+  const r = state.round;
+  if (viewer === null || r.landlord === null || r.stage !== 'play') return null;
+  const names = (seats: number[]) => seats.map((i) => (i === viewer ? 'you' : state.seats[i]!.name)).join(', ');
+  const all = state.seats.map((_, i) => i);
+  if (state.rules.gameMode === 'tractor') {
+    const defenders = all.filter((i) => i % 2 === r.landlord! % 2);
+    const attackers = all.filter((i) => !defenders.includes(i));
+    const mine = defenders.includes(viewer);
+    return (
+      <div className={`team-banner ${mine ? 'team-defend' : 'team-attack'}`}>
+        <strong>{mine ? 'Defending' : 'Attacking'}</strong> with {names((mine ? defenders : attackers).filter((i) => i !== viewer)) || 'nobody'} · against{' '}
+        {names(mine ? attackers : defenders)}
+      </div>
+    );
+  }
+  const hidden = r.friends.filter((f) => f.seat === null);
+  const onTeam = r.landlordTeam.includes(viewer);
+  const team = r.landlordTeam;
+  const knownAttackers = hidden.length === 0 ? all.filter((i) => !team.includes(i)) : [];
+  const myCalls = hidden.filter((f) => r.hands[viewer]!.includes(f.card));
+  return (
+    <div className={`team-banner ${onTeam ? 'team-defend' : myCalls.length ? 'team-maybe' : 'team-attack'}`}>
+      {onTeam ? (
+        <span>
+          <strong>{viewer === r.landlord ? "You're the landlord" : "You're the landlord's friend"}</strong> · team: {names(team)}
+        </span>
+      ) : (
+        <span>
+          <strong>Attacking</strong>
+          {knownAttackers.length ? ` with ${names(knownAttackers.filter((i) => i !== viewer)) || 'nobody'}` : ''} · landlord's team: {names(team)}
+        </span>
+      )}
+      {hidden.length > 0 && (
+        <span className="team-hidden">
+          {' '}· {hidden.length} friend{hidden.length === 1 ? '' : 's'} still hidden ({hidden.map((f) => `the ${ordinalText(f.ordinal)} ${cardLabel(f.card)}`).join(', ')})
+        </span>
+      )}
+      {!onTeam && myCalls.map((f, i) => (
+        <div key={i} className="team-hint">
+          You hold the called {cardLabel(f.card)}:{' '}
+          {f.skip === 0 ? 'if the next one played is yours, you join the landlord.' : `${f.skip} more cop${f.skip === 1 ? 'y has' : 'ies have'} to be played before the one that counts.`}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Watch mode / review: every seat's hand face up. */
+export function AllHands({ state }: { state: TractorState }) {
+  return (
+    <div className="all-hands">
+      {state.seats.map((s, i) => (
+        <div key={s.id} className="all-hands-row">
+          <span className="all-hands-name">
+            <span className="seat-dot" style={{ background: s.color }} /> {s.name}
+          </span>
+          <CardRow cards={sortedHand(state, i)} size="sm" />
+        </div>
+      ))}
     </div>
   );
 }

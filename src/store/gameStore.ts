@@ -5,6 +5,10 @@
 // every device stays in step. restoreState() rolls back (online, when
 // another device's move took the log slot this device's move was headed
 // for). States are immutable, so a snapshot is just the state reference.
+//
+// The store also records the match — its first state plus every action
+// applied — so the review screen can replay it. A rollback trims the record
+// back to the restored state.
 
 import { create } from 'zustand';
 import type { PlayerId, Seat } from '@/core/types';
@@ -22,13 +26,19 @@ export interface MatchSetup {
   seats: Seat[];
 }
 
+/** How many recorded actions led to each state (for trimming the record on rollback). */
+const stepOf = new WeakMap<TractorState, number>();
+
 interface GameStore {
   state: TractorState | null;
+  /** The match's opening state and every action since, in order. */
+  initial: TractorState | null;
+  actions: Action[];
   /** The human seat this device plays (online), or the hot-seat table's first human. */
   localPlayerId: PlayerId | null;
   /** The options + lineup the match started from, for "Play again". */
   setup: MatchSetup | null;
-  /** False while this device is loading AI policies for a match it didn't start (an online stand-in). */
+  /** False while this device is loading the AI network for a match it didn't start (an online stand-in). */
   aiReady: boolean;
 
   loadGame(state: TractorState, localPlayerId: PlayerId | null, setup: MatchSetup | null): void;
@@ -46,15 +56,27 @@ interface GameStore {
   _blocked: DispatchGuard | null;
 }
 
+function record(actions: Action[], before: TractorState, action: Action, next: TractorState): Action[] {
+  const at = stepOf.get(before) ?? actions.length;
+  const out = [...actions.slice(0, at), action];
+  stepOf.set(next, out.length);
+  return out;
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
+  initial: null,
+  actions: [],
   localPlayerId: null,
   setup: null,
   aiReady: true,
   _broadcast: null,
   _blocked: null,
 
-  loadGame: (state, localPlayerId, setup) => set({ state, localPlayerId, setup, aiReady: true }),
+  loadGame: (state, localPlayerId, setup) => {
+    stepOf.set(state, 0);
+    set({ state, localPlayerId, setup, aiReady: true, initial: state, actions: [] });
+  },
 
   dispatch: (action, opts) => {
     const { state, _broadcast, _blocked } = get();
@@ -66,7 +88,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     } catch (e) {
       return (e as Error).message;
     }
-    set({ state: next });
+    set({ state: next, actions: record(get().actions, state, action, next) });
     _broadcast?.(action, state, opts?.ai === true);
     return null;
   },
@@ -75,7 +97,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { state } = get();
     if (!state) return false;
     try {
-      set({ state: applyAction(state, action) });
+      const next = applyAction(state, action);
+      set({ state: next, actions: record(get().actions, state, action, next) });
       return true;
     } catch (e) {
       console.warn('[game] move rejected:', (e as Error).message);
@@ -83,9 +106,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
-  restoreState: (state) => set({ state }),
+  restoreState: (state) => {
+    const at = stepOf.get(state);
+    set({ state, actions: at === undefined ? get().actions : get().actions.slice(0, at) });
+  },
   setAiReady: (ready) => set({ aiReady: ready }),
-  clear: () => set({ state: null, localPlayerId: null, setup: null, aiReady: true }),
+  clear: () => set({ state: null, localPlayerId: null, setup: null, aiReady: true, initial: null, actions: [] }),
 
   registerBroadcastHandler: (fn) => set({ _broadcast: fn }),
   registerDispatchGuard: (fn) => set({ _blocked: fn }),

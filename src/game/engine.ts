@@ -30,7 +30,7 @@ import { advancePlayer, materialize, scoreRound, type ScoringParams, DEFAULT_SCO
 import { completeTrick, newTrick, nextToPlay, playCards, playProblem, trickComplete, type TrickRules } from './trick';
 import { compareCards, trumpLabel, type Trump } from './trump';
 import type { Seat } from '@/core/types';
-import type { Action, Friend, FriendCall, LogKind, RoundResult, RoundState, TractorState } from './types';
+import type { Action, Friend, FriendCall, LogEntry, LogKind, RoundResult, RoundState, TractorState } from './types';
 
 export class IllegalAction extends Error {
   constructor(message: string) {
@@ -45,16 +45,36 @@ function fail(message: string): never {
 
 const LOG_LIMIT = 250;
 
+/**
+ * Deep copy of plain JSON data (the state's only kind). Several times faster
+ * than structuredClone, which serializes; this runs on every action (the deal
+ * is one action per card), so it dominates headless play and training.
+ */
 function clone<T>(v: T): T {
-  return typeof structuredClone === 'function' ? structuredClone(v) : (JSON.parse(JSON.stringify(v)) as T);
+  if (typeof v !== 'object' || v === null) return v;
+  if (Array.isArray(v)) {
+    const a = new Array(v.length);
+    for (let i = 0; i < v.length; i++) a[i] = clone(v[i]);
+    return a as T;
+  }
+  const o: Record<string, unknown> = {};
+  for (const k in v) o[k] = clone((v as Record<string, unknown>)[k]);
+  return o as T;
 }
 
 export function seatName(state: TractorState, seat: number): string {
   return state.seats[seat]?.name ?? `Seat ${seat + 1}`;
 }
 
-function log(s: TractorState, kind: LogKind, text: string, seat?: number): void {
-  s.log.push(seat === undefined ? { n: s.logCount, kind, text } : { n: s.logCount, kind, text, seat });
+/** `bare`: the same line without its card / point details, for the hide-played-cards and hide-landlord-points options. */
+function log(s: TractorState, kind: LogKind, text: string, seat?: number, bare?: string): void {
+  const entry: LogEntry = { n: s.logCount, kind, text };
+  if (seat !== undefined) entry.seat = seat;
+  if (bare !== undefined) {
+    entry.bare = bare;
+    entry.round = s.round.number;
+  }
+  s.log.push(entry);
   s.logCount++;
   if (s.log.length > LOG_LIMIT) s.log.splice(0, s.log.length - LOG_LIMIT);
 }
@@ -78,20 +98,36 @@ export function scoringParams(config: TractorConfig): ScoringParams {
 // ------------------------------------------------------------------ setup
 
 export function createInitialState(config: TractorConfig, seed: number, seats: Seat[]): TractorState {
+  return createMatchAt(config, seed, seats, {});
+}
+
+/**
+ * A match that starts at chosen levels, with a chosen landlord (or none: the
+ * first round's bidding decides). For training and tests — the AI practises
+ * every rank situation without playing up from 2. Pure, like createInitialState.
+ */
+export function createMatchAt(
+  config: TractorConfig,
+  seed: number,
+  seats: Seat[],
+  at: { levels?: Level[]; landlord?: number | null },
+): TractorState {
   const cfg = normalizeConfig(config, seats.length);
   const errors = validateConfig(cfg, seats);
   if (errors.length) throw new Error(errors.join(' '));
   const rules = resolveRules(cfg, seats);
   const rngState = createRng(seed);
-  const dealer = rngInt(rngState, seats.length);
+  const landlord = at.landlord ?? null;
+  const randomDealer = rngInt(rngState, seats.length);
+  const dealer = landlord ?? randomDealer;
   const s: TractorState = {
     status: 'playing',
     seats: seats.map((x) => ({ ...x })),
     config: cfg,
     rules,
     rngState,
-    levels: seats.map(() => cfg.startingRank as Level),
-    landlord: null,
+    levels: at.levels ? at.levels.slice() : seats.map(() => cfg.startingRank as Level),
+    landlord,
     round: emptyRound(1, dealer, seats.length),
     history: [],
     log: [],
@@ -123,6 +159,7 @@ function emptyRound(number: number, dealer: number, n: number): RoundState {
     revealed: 0,
     bidTurn: null,
     passes: 0,
+    bidDone: [],
     landlord: null,
     trump: null,
     friends: [],
@@ -267,6 +304,18 @@ export function canRedeal(state: TractorState): boolean {
   );
 }
 
+/** Live deal: whose turn it is to draw the next card (null once the deck is out). */
+export function drawingSeat(state: TractorState): number | null {
+  const r = state.round;
+  return state.status === 'playing' && r.stage === 'draw' && r.deck.length > 0 ? r.dealTo : null;
+}
+
+/** After a live deal: `seat` may say it has no more bids (so an AI landlord needn't wait for it). */
+export function canSayDoneBidding(state: TractorState, seat: number): boolean {
+  const r = state.round;
+  return state.status === 'playing' && r.stage === 'draw' && r.deck.length === 0 && !r.bidDone.includes(seat) && landlordToBe(state) !== seat;
+}
+
 /** The seat whose decision the round waits on, or null (live deal, between rounds). */
 export function activeSeat(state: TractorState): number | null {
   if (state.status !== 'playing') return null;
@@ -335,7 +384,13 @@ function reduce(s: TractorState, a: Action): void {
   switch (a.type) {
     case 'draw': {
       if (r.stage !== 'draw' || r.deck.length === 0) fail('Nothing left to deal.');
-      for (let i = 0; i < n && r.deck.length > 0; i++) dealOne(r, n);
+      if (a.seat !== r.dealTo) fail("It isn't your turn to draw.");
+      dealOne(r, n);
+      return;
+    }
+    case 'doneBidding': {
+      if (!canSayDoneBidding(s, a.seat)) fail('Nothing to finish.');
+      r.bidDone.push(a.seat);
       return;
     }
     case 'bid': {
@@ -344,6 +399,7 @@ function reduce(s: TractorState, a: Action): void {
       if (!isValidBid(bid, validBidsFor(s, a.seat))) fail('That bid is not allowed.');
       const reinforcing = r.bids.length > 0 && r.bids[r.bids.length - 1]!.seat === a.seat;
       r.bids.push(bid);
+      r.bidDone = []; // an overcall gives everyone another chance
       log(s, 'bid', `${seatName(s, a.seat)} ${reinforcing ? 'reinforces with' : 'declares'} ${bidText(bid)}.`, a.seat);
       if (r.stage === 'bid') {
         r.passes = 0;
@@ -391,6 +447,14 @@ function reduce(s: TractorState, a: Action): void {
       return doExchange(s, a.seat, a.bury, a.friends);
     case 'play':
       return doPlay(s, a.seat, a.cards, a.format);
+    case 'endRoundEarly': {
+      if (!Number.isInteger(a.seat) || a.seat < 0 || a.seat >= n) fail('Unknown seat.');
+      if (!canEndRoundEarly(s)) fail('The rest of the round can still change the result — play on.');
+      log(s, 'round', `${seatName(s, a.seat)} ends the round early: nothing left can change the result.`, a.seat);
+      r.kittyBonus = null;
+      finishRound(s, true);
+      return;
+    }
     case 'nextRound': {
       if (r.stage !== 'roundOver' || !r.result) fail('The round is not over.');
       s.landlord = r.result.nextLandlord;
@@ -517,10 +581,17 @@ function doPlay(s: TractorState, seat: number, cards: readonly Card[], format: n
       'throw',
       `${seatName(s, seat)} tried to throw ${out.failedThrow.attempted.map(cardShort).join(' ')}, but ${by} can beat part of it — only ${out.failedThrow.forced.map(cardShort).join(' ')} goes down.`,
       seat,
+      `${seatName(s, seat)}'s throw failed — ${by} could beat part of it.`,
     );
     if (s.config.throwPenalty === 'tenPointsPerAttempt') r.penalties[seat]! += 10;
   } else {
-    log(s, 'play', `${seatName(s, seat)} ${leading ? 'leads' : 'plays'} ${played.map(cardShort).join(' ')}.`, seat);
+    log(
+      s,
+      'play',
+      `${seatName(s, seat)} ${leading ? 'leads' : 'plays'} ${played.map(cardShort).join(' ')}.`,
+      seat,
+      `${seatName(s, seat)} ${leading ? 'leads' : 'plays'} ${played.length} card${played.length === 1 ? '' : 's'}.`,
+    );
   }
   revealFriends(s, seat, played);
 
@@ -529,7 +600,13 @@ function doPlay(s: TractorState, seat: number, cards: readonly Card[], format: n
   r.captured[result.winner]!.push(...result.pointCards);
   r.tricks.push({ leader: r.trick.order[0]!, suit: r.trick.format!.suit, plays: r.trick.plays, winner: result.winner, points: result.points });
   const last = r.hands.every((h) => h.length === 0);
-  log(s, 'trick', `${seatName(s, result.winner)} wins the trick${result.points ? ` (+${result.points})` : ''}.`, result.winner);
+  log(
+    s,
+    'trick',
+    `${seatName(s, result.winner)} wins the trick${result.points ? ` (+${result.points})` : ''}.`,
+    result.winner,
+    `${seatName(s, result.winner)} wins the trick.`,
+  );
   if (last) {
     const kittyPts = totalPoints(r.kitty);
     const mult = s.config.kittyPenalty === 'power' ? 2 ** result.largestUnitSize : 2 * result.largestUnitSize;
@@ -565,30 +642,93 @@ function revealFriends(s: TractorState, seat: number, played: readonly Card[]): 
   }
 }
 
-function finishRound(s: TractorState): void {
-  const r = s.round;
-  const n = s.seats.length;
-  const landlord = r.landlord!;
+/** Points the attackers have from tricks, plus throw penalties so far (no kitty). */
+function attackerTrickPoints(r: RoundState): { points: number; penaltyAdjustment: number } {
   const team = r.landlordTeam;
-  let attackerPoints = 0;
+  let points = 0;
   r.captured.forEach((cards, seat) => {
-    if (!team.includes(seat)) attackerPoints += totalPoints(cards);
+    if (!team.includes(seat)) points += totalPoints(cards);
   });
-  const kb = r.kittyBonus;
-  const kittyToAttackers = !!kb && !team.includes(kb.seat);
-  if (kb && kittyToAttackers) attackerPoints += kb.points * kb.multiplier;
   let penaltyAdjustment = 0;
   r.penalties.forEach((p, seat) => {
     if (p > 0) penaltyAdjustment += team.includes(seat) ? p : -p;
   });
-  attackerPoints += penaltyAdjustment;
+  return { points: points + penaltyAdjustment, penaltyAdjustment };
+}
 
-  const params = scoringParams(s.config);
-  const m = materialize(params, s.rules.numDecks, s.rules.numDecks * 100);
+export interface RoundOutcome {
+  landlordWon: boolean;
+  /** Bonus level included. */
+  landlordDelta: number;
+  attackerDelta: number;
+  bonusLevel: boolean;
+}
+
+/** How the round scores if the attackers finish on `attackerPoints`, with the landlord's team as it stands. */
+export function outcomeFor(state: TractorState, attackerPoints: number): RoundOutcome {
+  const params = scoringParams(state.config);
+  const m = materialize(params, state.rules.numDecks, state.rules.numDecks * 100);
   const score = scoreRound(m, attackerPoints);
-  const smallerTeam = s.rules.gameMode === 'findingFriends' && team.length < s.rules.numFriends + 1;
+  const team = state.round.landlordTeam;
+  const smallerTeam = state.rules.gameMode === 'findingFriends' && team.length < state.rules.numFriends + 1;
   const bonusLevel = score.landlordWon && params.bonusLevelForSmallerTeam && smallerTeam;
-  const landlordDelta = score.landlordDelta + (bonusLevel ? 1 : 0);
+  return { landlordWon: score.landlordWon, landlordDelta: score.landlordDelta + (bonusLevel ? 1 : 0), attackerDelta: score.attackerDelta, bonusLevel };
+}
+
+/**
+ * The lowest and highest totals the attackers could still finish the round
+ * on, worked out from public information only (so the "end early" button
+ * gives nothing away): the point cards nobody has seen go anywhere (with
+ * "hide landlord points", the defenders' captures count as unseen too),
+ * any kitty points could be multiplied by the most a last trick allows, and
+ * every remaining trick could add a failed-throw penalty either way. Null
+ * between deals, mid-trick, or while a friend in Finding Friends is unknown
+ * (who's on which side can still change).
+ */
+export function attackerPointRange(state: TractorState): { now: number; min: number; max: number } | null {
+  const r = state.round;
+  if (state.status !== 'playing' || r.stage !== 'play' || !r.trick || r.trick.plays.length > 0 || r.tricks.length === 0) return null;
+  if (state.rules.gameMode === 'findingFriends' && r.friends.some((f) => f.seat === null)) return null;
+  const tricksLeft = r.hands[0]!.length;
+  if (tricksLeft === 0) return null;
+  const now = attackerTrickPoints(r).points;
+  const total = state.rules.numDecks * 100 - totalPoints(r.removed);
+  let seen = 0;
+  r.captured.forEach((cards, seat) => {
+    if (!state.config.hideLandlordPoints || !r.landlordTeam.includes(seat)) seen += totalPoints(cards);
+  });
+  const unseen = Math.max(0, total - seen);
+  const kittyMax = Math.min(unseen, 10 * r.kittySize);
+  const multiplier = state.config.kittyPenalty === 'power' ? 2 ** tricksLeft : 2 * tricksLeft;
+  const penalties = state.config.throwPenalty === 'tenPointsPerAttempt' ? 10 * tricksLeft : 0;
+  return { now, min: now - penalties, max: now + (unseen - kittyMax) + kittyMax * multiplier + penalties };
+}
+
+/** True when no way of playing out the rest of the round could change its result (levels, who leads next). */
+export function canEndRoundEarly(state: TractorState): boolean {
+  const range = attackerPointRange(state);
+  if (!range) return false;
+  if ((range.max - range.min) / 5 > 20000) return false;
+  const key = (p: number) => JSON.stringify(outcomeFor(state, p));
+  const now = key(range.now);
+  for (let p = range.min; p <= range.max; p += 5) if (key(p) !== now) return false;
+  return true;
+}
+
+function finishRound(s: TractorState, endedEarly = false): void {
+  const r = s.round;
+  const n = s.seats.length;
+  const landlord = r.landlord!;
+  const team = r.landlordTeam;
+  const trickPart = attackerTrickPoints(r);
+  let attackerPoints = trickPart.points;
+  const penaltyAdjustment = trickPart.penaltyAdjustment;
+  const kb = r.kittyBonus;
+  const kittyToAttackers = !!kb && !team.includes(kb.seat);
+  if (kb && kittyToAttackers) attackerPoints += kb.points * kb.multiplier;
+
+  const score = outcomeFor(s, attackerPoints);
+  const { bonusLevel, landlordDelta } = score;
   const landlordLevel = s.levels[landlord]!;
 
   const advancements = s.levels.map((level, seat) => {
@@ -623,6 +763,7 @@ function finishRound(s: TractorState): void {
     nextLandlord: next,
     kitty: r.kitty.slice(),
     winners,
+    ...(endedEarly ? { endedEarly: true } : {}),
   };
   r.result = result;
   r.stage = 'roundOver';

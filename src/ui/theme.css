@@ -629,5 +629,3 @@ button.tiny {
   .game-host-wide { display: none; }
 }
 
-/* Per-seat AI difficulty (lobbies). */
-.seat-level { font-size: 12px; padding: 3px 6px; max-width: 96px; }

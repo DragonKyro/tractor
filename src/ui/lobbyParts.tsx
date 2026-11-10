@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { SEAT_COLORS, SEAT_COLOR_LABELS } from '@/core/seatColors';
-import type { Seat } from '@/core/types';
-import { AI_LEVELS, seatAiLevel } from '@/ai';
 
 /** Clickable seat-color picker. Shows the current swatch; clicking opens a
  *  small popover grid of the palette. Colors already used by OTHER seats are
@@ -149,29 +147,5 @@ export function RulesModal({ title, Rules, onClose }: { title: string; Rules: Re
         </div>
       </div>
     </div>
-  );
-}
-
-/** Per-seat AI difficulty picker; nothing for human seats. */
-export function AiLevelSelect({ seat, disabled, onChange }: {
-  seat: Seat;
-  disabled?: boolean;
-  onChange: (level: string) => void;
-}) {
-  if (!seat.isAI || AI_LEVELS.length < 2) return null;
-  const value = seatAiLevel(seat);
-  if (disabled) {
-    return <span className="online-tag">{AI_LEVELS.find((l) => l.id === value)?.label ?? value}</span>;
-  }
-  return (
-    <select
-      className="seat-level"
-      aria-label={`${seat.name} difficulty`}
-      title="AI difficulty"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {AI_LEVELS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-    </select>
   );
 }

@@ -67,6 +67,8 @@ export interface RoundResult {
   kitty: Card[];
   /** Seats that passed the final rank this round (the game is over when non-empty). */
   winners: number[];
+  /** Ended before the last trick because nothing left could change the result. */
+  endedEarly?: boolean;
 }
 
 export interface RoundState {
@@ -95,6 +97,8 @@ export interface RoundState {
   bidTurn: number | null;
   /** Turn bidding: consecutive passes. */
   passes: number;
+  /** Live bidding, after the deal: seats that said they have no more bids. */
+  bidDone: number[];
   landlord: number | null;
   trump: Trump | null;
   friends: Friend[];
@@ -119,6 +123,10 @@ export interface LogEntry {
   kind: LogKind;
   text: string;
   seat?: number;
+  /** The line without card / point details (shown instead while the round's hide options apply). */
+  bare?: string;
+  /** Round the entry belongs to (set with `bare`). */
+  round?: number;
 }
 
 export interface TractorState {
@@ -145,8 +153,10 @@ export interface TractorState {
 }
 
 export type Action =
-  /** Live bidding: deal one card to every player (driven by the host / local device). */
-  | { type: 'draw' }
+  /** Live bidding: `seat` draws the next card (it must be their turn: round.dealTo). */
+  | { type: 'draw'; seat: number }
+  /** After a live deal: no more bids from `seat`. */
+  | { type: 'doneBidding'; seat: number }
   | { type: 'bid'; seat: number; card: Card; count: number }
   /** Turn bidding: decline to bid this turn. */
   | { type: 'pass'; seat: number }
@@ -159,6 +169,8 @@ export type Action =
   | { type: 'exchange'; seat: number; bury: Card[]; friends: FriendCall[] }
   /** `format` picks a reading of an ambiguous lead (an index into possibleFormats). */
   | { type: 'play'; seat: number; cards: Card[]; format?: number }
+  /** Stop the round once nothing left can change its result (canEndRoundEarly); `seat` is who asked. */
+  | { type: 'endRoundEarly'; seat: number }
   | { type: 'nextRound' };
 
 export type ActionType = Action['type'];

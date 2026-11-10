@@ -234,6 +234,27 @@ describe('throws', () => {
   }
 });
 
+describe('a follow that can be read two ways', () => {
+  // ♠ trump. Seat 0 throws A♥A♥ K♥ Q♥ (stands: nobody has hearts).
+  // Seat 1 trumps with 7♠7♠9♠9♠ = "pair 9s + 7, 7" or "pair 7s + 9, 9".
+  const trump: Trump = { kind: 'standard', suit: 'S', number: '2' };
+  const lead = ['AH', 'AH', 'KH', 'QH'];
+  const seat1 = ['7S', '7S', '9S', '9S'];
+  const clubs = ['3C', '4C', '5C', '6C'];
+
+  it('a later play must beat every reading of the winner’s cards (ties and ambiguity go to the earlier player)', () => {
+    // 8♠8♠ J♠ 10♠ beats "pair 7s + 9, 9" but not "pair 9s + 7, 7".
+    const { result } = runTrick(trump, [lead, seat1, ['8S', '8S', 'JS', 'TS'], clubs], [lead, seat1, ['8S', '8S', 'JS', 'TS'], clubs], rules());
+    expect(result.winner).toBe(1);
+  });
+
+  it('a play that beats every reading takes the trick', () => {
+    const seat2 = ['TS', 'TS', 'QS', 'JS'];
+    const { result } = runTrick(trump, [lead, seat1, seat2, clubs], [lead, seat1, seat2, clubs], rules());
+    expect(result.winner).toBe(2);
+  });
+});
+
 describe('trick formats', () => {
   it('basic triple', () => {
     const tf = formatFromCards(TRUMP, DEFAULT_TRACTOR_REQUIREMENTS, ['2S', '2S', '2S']);

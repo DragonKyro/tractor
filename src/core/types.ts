@@ -12,6 +12,4 @@ export type Seat = {
   isAI: boolean;
   /** A seat on this device's hot-seat table (online seats are never local). */
   isLocal: boolean;
-  /** AI seats: one of AI_LEVELS' ids (absent = DEFAULT_AI_LEVEL). */
-  aiLevel?: string;
 };
