@@ -55,6 +55,7 @@ export function ColorSwatchPicker({ value, takenBy, disabled, onChange }: {
                 <button
                   key={c}
                   type="button"
+                  className="swatch"
                   onClick={() => { onChange(c); setOpen(false); }}
                   title={taken ? `${SEAT_COLOR_LABELS[c]} — taken by ${taken}` : SEAT_COLOR_LABELS[c]}
                   disabled={!!taken}

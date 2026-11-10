@@ -2,10 +2,11 @@
 // local route state. While this device is in an online room the room
 // decides instead: connecting / error card, the room's lobby, or its match.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { isOnlineConfigured } from '@/net/firebaseConfig';
 import type { MatchSetup } from '@/store/gameStore';
 import { useNetworkStore } from '@/store/networkStore';
+import { usePrefs } from '@/store/prefsStore';
 import { CardView } from './CardView';
 import { GameHost } from './GameHost';
 import { LocalLobby } from './LocalLobby';
@@ -16,6 +17,9 @@ import { RulesText } from './Rules';
 
 type Screen = { kind: 'home' } | { kind: 'lobby'; initial?: MatchSetup } | { kind: 'playing' };
 
+const HOME_FAN = ['JC', 'QD', 'BJ', 'KH', 'AS'];
+const HOME_SUITS = ['♠', '♥', '♦', '♣', '♠', '♥', '♦', '♣'];
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ kind: 'home' });
   const [lobbyVisit, setLobbyVisit] = useState(0);
@@ -23,6 +27,7 @@ export default function App() {
   const connection = useNetworkStore((s) => s.connection);
   const urlCode = useRejoinFromUrl();
   const onlineReady = isOnlineConfigured();
+  const twoColor = usePrefs((s) => s.twoColor);
 
   // Leaving a room lands back home.
   const wasOnline = useRef(false);
@@ -37,7 +42,7 @@ export default function App() {
   const online = connection !== 'disconnected';
 
   return (
-    <div className={`app-shell${(online && connection === 'in-game') || (!online && screen.kind === 'playing') ? ' app-playing' : ''}`}>
+    <div className={`app-shell${(online && connection === 'in-game') || (!online && screen.kind === 'playing') ? ' app-playing' : ''}${twoColor ? ' suits-two' : ''}`}>
       <header>
         <strong
           className="app-title"
@@ -55,14 +60,23 @@ export default function App() {
         {!online && screen.kind === 'home' && (
           <div className="home">
             <div className="home-hero">
-              <div className="home-fan">
-                {['AH', 'AH', 'BJ', 'LJ', '2S'].map((c, i) => (
-                  <span key={i} className="home-fan-card" style={{ transform: `rotate(${(i - 2) * 9}deg) translateY(${Math.abs(i - 2) * 6}px)` }}>
-                    <CardView card={c} size="lg" />
+              <div className="home-sky" aria-hidden>
+                {HOME_SUITS.map((s, i) => (
+                  <span key={i} className={`home-sky-suit suit suit-${'SHDC'[i % 4]}`} style={{ '--n': i, '--x': `${(i * 13 + 4) % 94}%`, '--y': `${(i * 37 + 6) % 80}%` } as CSSProperties}>
+                    {s}
                   </span>
                 ))}
               </div>
-              <h1>Tractor</h1>
+              <div className="home-fan">
+                {HOME_FAN.map((c, i) => (
+                  <span key={i} className="home-fan-card" style={{ '--k': i - 2 } as CSSProperties}>
+                    <span className="home-fan-float">
+                      <CardView card={c} size="lg" />
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <h1 className="home-title">Tractor</h1>
               <p className="home-tag">升级 · Shengji · Finding Friends — the climbing trick-taking game, for any number of players and decks.</p>
               <div className="home-actions">
                 <button className="home-play" onClick={() => setScreen({ kind: 'lobby' })}>Play — hot-seat or vs AI</button>

@@ -38,7 +38,7 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 ## Credits
 
 - Rules reference and test scenarios: [shengji](https://github.com/rbtying/shengji) by Robert Ying (MIT).
-- Card faces: [Adrian Kennard's SVG playing cards](https://www.me.uk/cards/) (CC0), as packaged by shengji (`public/cards`, four-color set in `public/cards-4c`).
+- Card art: drawn for this project in code (`src/ui/cardArt.ts`): four-colour suits, cartoon court cards, jester jokers and a tractor back.
 
 ## Checklist
 
@@ -59,7 +59,7 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Options to hide the defenders' captured points and the record of played cards (the table keeps count; everything shows at the round's end)
 - [x] "End round early": offered only when public information proves nothing left can change the result — unseen point cards, the largest possible kitty multiplier and future throw penalties all included (`canEndRoundEarly`); checked against playing the round out in AI games (`earlyEnd.test.ts`)
 - [x] Live deal one card at a time, each player drawing in turn: auto-draw or click to draw (D / Space); deal speed and the post-deal "time to overcall" (3 / 6 / 12 s, with a countdown) are set right in the deal panel; "No more bids" lets an AI landlord take the kitty at once
-- [x] Animations (cards fly in from their seat, tricks sweep to the winner, drawn cards pop in, the active seat glows; reduced-motion respected) and synthesized sounds (toggle in Settings)
+- [x] Animations: cards are dealt from the deck to each seat; plays spin in from their seat and flip face up, the viewer's own fly up from the hand; a won trick flashes, sweeps to the winner and its points pop up there; the hand fans, lifts what's selected and slides cards into place when it re-sorts; bids pop with a ring, the active seat has a spinning ring, friends found and failed throws get a banner; the round summary counts the points up, with confetti when your side wins. All of it respects reduced motion. Synthesized sounds (toggle in Settings)
 - [x] Drag across cards to select several; keyboard: Enter plays / confirms, Esc clears, H hints
 - [x] Team view: a banner says who you're with (and, in Finding Friends, which friends are still hidden and whether a card you hold could make you one); seat badges ringed by side
 - [x] Watch mode for all-AI tables with every hand face up
@@ -69,7 +69,8 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Hot-seat with pass-the-device screens
 - [x] Online rooms: lobby, seats (reorder for partners), options, chat, presence, spectators, rejoin by link, driver hand-off, rollback on races
 - [x] Firebase: `/tractor` namespace, rules deployed through the merge script, live round-trip test
-- [x] UI: home, lobbies, options (with house rules), felt table, hand with selection, bid / exchange / friend / play panels, hints, log, round summary, rules page, four-color cards, AI speed
+- [x] UI: home, lobbies, options (with house rules), felt table, hand with selection, bid / exchange / friend / play panels, hints, log, round summary, rules page, AI speed
+- [x] Our own deck drawn in code: four-colour suits by default (♠ ink, ♥ red, ♦ blue, ♣ green; classic red / black in Settings), big stroked indices, a compact face with a giant index for the small sizes, cartoon kings / queens / jacks, big (colour) and small (grey) jester jokers, a crimson tractor back; trump cards in the hand get a gold edge, and suit symbols in the log, status bar and banners use the same colours
 
 - [x] Learned AI (`src/ai/nn`, `training/tractor`, see [training/README.md](training/README.md)):
   - an encoder of a seat's view with a block per seat for every table up to 12 players: how each seat played each card (led, followed, ruffed, discarded, first discard, when it led and discarded, this and the last trick, cards shown), levels, sides, voids, bids, points fed to each side; per suit: unseen cards and points, boss status, cards above my top; trump control, the endgame and the kitty multiplier
@@ -93,4 +94,3 @@ AI
 
 UI / UX
 - [ ] Try the offline hand-off and the online draw flow with real people on several devices (covered by unit / fake-server tests and typechecks, not yet by hand)
-- [ ] Deal animation from the deck to each seat (cards currently pop into your hand)

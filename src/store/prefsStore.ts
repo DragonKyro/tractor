@@ -10,8 +10,8 @@ export type DealSpeed = 'slow' | 'normal' | 'fast';
 export type BidWindow = 'short' | 'normal' | 'long';
 
 export interface PrefValues {
-  /** Four-color suits (♦ orange, ♣ green) instead of red/black. */
-  fourColor: boolean;
+  /** Classic red / black suits instead of the four-colour deck (♠ ink, ♥ red, ♦ blue, ♣ green). */
+  twoColor: boolean;
   aiSpeed: AiSpeed;
   dealSpeed: DealSpeed;
   bidWindow: BidWindow;
@@ -28,7 +28,7 @@ interface Prefs extends PrefValues {
 
 const KEY = 'tractor.prefs';
 const DEFAULTS: PrefValues = {
-  fourColor: false,
+  twoColor: false,
   aiSpeed: 'normal',
   dealSpeed: 'normal',
   bidWindow: 'normal',
@@ -39,7 +39,9 @@ const DEFAULTS: PrefValues = {
 
 function load(): Partial<PrefValues> {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<PrefValues>;
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>;
+    // Only known keys (older builds stored others, e.g. `fourColor`).
+    return Object.fromEntries(Object.entries(saved).filter(([k]) => k in DEFAULTS)) as Partial<PrefValues>;
   } catch {
     return {};
   }

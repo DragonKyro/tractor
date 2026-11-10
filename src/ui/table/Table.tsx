@@ -8,11 +8,13 @@ import { cardLabel } from '@/game/cards';
 import { materialize } from '@/game/scoring';
 import type { Action, TractorState } from '@/game/types';
 import { CardRow } from '../CardView';
+import { SuitText } from '../SuitText';
 import { ActionPanel, indicesOf } from './ActionPanel';
 import { Felt } from './Felt';
 import { Hand } from './Hand';
 import { RoundSummary } from './RoundSummary';
 import { SidePanel } from './SidePanel';
+import { captureLaunch } from './flight';
 import { levelText, trumpParts } from './labels';
 
 export interface SummaryControls {
@@ -51,6 +53,11 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
   const [hideSummary, setHideSummary] = useState(false);
   useEffect(() => setHideSummary(false), [r.number, r.stage]);
   const [sideOpen, setSideOpen] = useState(false);
+  // The viewer's plays fly from the hand: note where the cards are just before they leave it.
+  const send = (a: Action) => {
+    if (a.type === 'play' && a.seat === viewer) captureLaunch(viewer);
+    return dispatch(a);
+  };
 
   const active = activeSeat(state);
   const canSelect = viewer !== null && ((r.stage === 'play' && active === viewer) || (r.stage === 'exchange' && r.landlord === viewer));
@@ -64,7 +71,7 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
       <div className="table-main">
         <StatusBar state={state} onToggleSide={() => setSideOpen((v) => !v)} />
         <TeamBanner state={state} viewer={viewer} />
-        <Felt state={state} bottom={viewer ?? 0} />
+        <Felt state={state} bottom={viewer ?? 0} live />
         {viewer !== null && (
           <>
             <ActionPanel
@@ -73,7 +80,7 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
               hand={hand}
               selected={selected}
               setSelected={setSelected}
-              dispatch={dispatch}
+              dispatch={send}
               automation={automation}
             />
             <Hand cards={hand} trump={trump} selected={selected} onSelect={canSelect ? setSelected : undefined} marked={marked} markLabel="kitty" />
@@ -87,7 +94,7 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
         {showAllHands && <AllHands state={state} />}
       </div>
       <SidePanel state={state} canShowAllHands={canShowAllHands} onClose={() => setSideOpen(false)} />
-      {r.stage === 'roundOver' && !hideSummary && <RoundSummary state={state} {...summary} onHide={() => setHideSummary(true)} />}
+      {r.stage === 'roundOver' && !hideSummary && <RoundSummary state={state} viewer={viewer} {...summary} onHide={() => setHideSummary(true)} />}
       {r.stage === 'roundOver' && hideSummary && (
         <button className="summary-reopen" onClick={() => setHideSummary(false)}>Show the round's result</button>
       )}
@@ -103,19 +110,20 @@ function StatusBar({ state, onToggleSide }: { state: TractorState; onToggleSide:
   const landlord = r.landlord ?? state.landlord;
   const lead = r.autobid ?? r.bids[r.bids.length - 1] ?? null;
   const number = landlord !== null ? levelText(state.levels[landlord]!) : null;
+  const points = r.stage === 'roundOver' && r.result ? r.result.attackerPoints : attackerPointsSoFar(state);
   return (
     <div className="status-bar">
-      <span className="status-item">Round {r.number}</span>
+      <span className="status-item status-round">Round {r.number}</span>
       <span className="status-item status-trump" title={t.label}>
-        Trump{' '}
+        <span className="status-label">Trump</span>
         {r.trump ? (
-          <strong className={t.red ? 'red' : ''}>
-            {t.symbol}
+          <strong key={`${t.symbol}${t.number}`} className="trump-chip on-card">
+            <span className={t.suitClass}>{t.symbol}</span>
             {t.number}
           </strong>
         ) : lead ? (
           <span>
-            {bidText(lead)} by {state.seats[lead.seat]!.name}
+            <SuitText text={bidText(lead)} /> by {state.seats[lead.seat]!.name}
             {number ? ` (${number}s)` : ''}
           </span>
         ) : (
@@ -129,7 +137,10 @@ function StatusBar({ state, onToggleSide }: { state: TractorState; onToggleSide:
       )}
       {(r.stage === 'play' || r.stage === 'roundOver') && (
         <span className="status-item status-points" title="Points the attackers have captured / needed to take over">
-          Attackers <strong>{r.stage === 'roundOver' && r.result ? r.result.attackerPoints : attackerPointsSoFar(state)}</strong> / {threshold}
+          Attackers <strong key={points}>{points}</strong> / {threshold}
+          <span className={`points-meter${points >= threshold ? ' points-meter-over' : ''}`} aria-hidden>
+            <span style={{ width: `${Math.min(100, (points / Math.max(1, threshold)) * 100)}%` }} />
+          </span>
         </span>
       )}
       {r.stage === 'play' && (
@@ -178,12 +189,12 @@ function TeamBanner({ state, viewer }: { state: TractorState; viewer: number | n
       )}
       {hidden.length > 0 && (
         <span className="team-hidden">
-          {' '}· {hidden.length} friend{hidden.length === 1 ? '' : 's'} still hidden ({hidden.map((f) => `the ${ordinalText(f.ordinal)} ${cardLabel(f.card)}`).join(', ')})
+          {' '}· {hidden.length} friend{hidden.length === 1 ? '' : 's'} still hidden (<SuitText text={hidden.map((f) => `the ${ordinalText(f.ordinal)} ${cardLabel(f.card)}`).join(', ')} />)
         </span>
       )}
       {!onTeam && myCalls.map((f, i) => (
         <div key={i} className="team-hint">
-          You hold the called {cardLabel(f.card)}:{' '}
+          You hold the called <SuitText text={cardLabel(f.card)} />:{' '}
           {f.skip === 0 ? 'if the next one played is yours, you join the landlord.' : `${f.skip} more cop${f.skip === 1 ? 'y has' : 'ies have'} to be played before the one that counts.`}
         </div>
       ))}
