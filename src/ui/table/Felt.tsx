@@ -4,7 +4,9 @@
 // and flip face up (the viewer's own fly up from the hand); a finished trick
 // flashes and sweeps off toward whoever won it, its points popping up there.
 // On the live table cards are also dealt from the deck to each seat, and
-// friends found / throws failing get a banner.
+// friends found / throws failing get a banner. `peek` shows the previous
+// trick in place of the live one (which carries on underneath, hidden, so
+// nothing replays when the peek ends).
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { totalPoints, type Card } from '@/game/cards';
@@ -22,6 +24,8 @@ interface Props {
   bottom: number;
   /** The live table (not the replay): deal flights, the viewer's cards flying from the hand, event banners. */
   live?: boolean;
+  /** Show the previous trick instead of the current one. */
+  peek?: boolean;
 }
 
 const BADGE_R: [number, number] = [44, 41];
@@ -61,7 +65,7 @@ function tilt(seat: number, trick: number): number {
   return (((seat * 7 + trick * 3) % 7) - 3) * 1.4;
 }
 
-export function Felt({ state, bottom, live = false }: Props) {
+export function Felt({ state, bottom, live = false, peek = false }: Props) {
   const r = state.round;
   const n = state.seats.length;
   const active = activeSeat(state);
@@ -93,9 +97,11 @@ export function Felt({ state, bottom, live = false }: Props) {
   const lastTrick = r.tricks[r.tricks.length - 1];
   const winnerSpot = trickWinner !== null ? spot(kOf(trickWinner), n, BADGE_R) : null;
   const trickPoints = showingLast && lastTrick && !pointsHidden(state, lastTrick.winner) ? lastTrick.points : 0;
+  const peeking = peek && !!lastTrick && (r.stage === 'play' || r.stage === 'roundOver');
+  const lastPoints = lastTrick && !pointsHidden(state, lastTrick.winner) ? lastTrick.points : 0;
 
   return (
-    <div className={`felt felt-n${Math.min(n, 9)}`}>
+    <div className={`felt felt-n${Math.min(n, 9)}${peeking ? ' felt-peeking' : ''}`}>
       <div className="felt-watermark" aria-hidden>
         升级
       </div>
@@ -166,7 +172,7 @@ export function Felt({ state, bottom, live = false }: Props) {
                 key={`t${r.number}-${trickNo}-${i}`}
                 seat={i}
                 fly={live && i === bottom}
-                className={`seat-play${showingLast ? ' seat-play-sweep' : ''}${trickWinner === i ? ' seat-play-winner' : ''}`}
+                className={`seat-play${showingLast ? ' seat-play-sweep' : ''}${trickWinner === i ? ' seat-play-winner' : ''}${peeking ? ' seat-play-hidden' : ''}`}
                 style={playStyle}
                 cards={play.cards}
                 highlight={trickWinner === i}
@@ -188,10 +194,23 @@ export function Felt({ state, bottom, live = false }: Props) {
       })}
 
       {trickPoints > 0 && winnerSpot && (
-        <div key={`pp${r.number}-${trickNo}`} className="points-pop" style={{ left: `${winnerSpot.x}%`, top: `${winnerSpot.y}%` }}>
+        <div key={`pp${r.number}-${trickNo}`} className={`points-pop${peeking ? ' is-hidden' : ''}`} style={{ left: `${winnerSpot.x}%`, top: `${winnerSpot.y}%` }}>
           +{trickPoints}
         </div>
       )}
+
+      {peeking &&
+        lastTrick!.plays.map((p) => {
+          const at = spot(kOf(p.seat), n, PLAY_R);
+          const won = lastTrick!.winner === p.seat;
+          const style = { left: `${at.x}%`, top: `${at.y}%`, '--tilt': `${tilt(p.seat, r.tricks.length - 1)}deg` } as CSSProperties;
+          return (
+            <div key={`peek-${r.tricks.length}-${p.seat}`} className={`seat-play seat-play-peek${won ? ' seat-play-winner' : ''}`} style={style}>
+              <CardRow cards={p.cards} size="sm" highlight={won} />
+              {p.badThrowCards.length > 0 && <span className="seat-play-note">throw failed</span>}
+            </div>
+          );
+        })}
 
       <div className="felt-center">
         {r.stage === 'draw' && (
@@ -220,7 +239,14 @@ export function Felt({ state, bottom, live = false }: Props) {
             <span className="felt-pill felt-pill-wait">{state.seats[r.landlord!]!.name} is burying the kitty</span>
           </div>
         )}
-        {r.stage === 'play' && showingLast && lastTrick && (
+        {peeking && (
+          <div className="felt-deck">
+            <span className="felt-pill felt-pill-peek">
+              Previous trick · {state.seats[lastTrick!.winner]!.name} won{lastPoints ? ` (+${lastPoints})` : ''}
+            </span>
+          </div>
+        )}
+        {!peeking && r.stage === 'play' && showingLast && lastTrick && (
           <div className="felt-deck felt-last">
             <span key={`w${r.number}-${trickNo}`} className="felt-pill felt-pill-won">
               {state.seats[lastTrick.winner]!.name} won the trick{trickPoints ? ` (+${trickPoints})` : ''}

@@ -166,7 +166,7 @@ function Settings({ canShowAllHands }: { canShowAllHands: boolean }) {
         </label>
       )}
       <p className="lobby-hint">
-        Keys: Enter plays / confirms, Esc clears, H hints, D or Space draws. Drag across cards to select several.
+        Keys: Enter plays / confirms, Esc clears, H hints, D or Space draws, L shows the last trick. Drag across cards to select several.
       </p>
       <p className="lobby-hint">Settings are kept on this device only.</p>
     </div>

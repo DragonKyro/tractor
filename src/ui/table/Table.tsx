@@ -2,7 +2,7 @@
 // spectator or a pass-the-device screen) and dispatch; never reads the game
 // stores itself, so hot-seat / online / spectating all render the same way.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { activeSeat, attackerPointsSoFar, bidText, displayTrump, ordinalText, scoringParams, sortedHand } from '@/game/engine';
 import { cardLabel, cardRank, cardSuit, isJoker, type Card } from '@/game/cards';
 import { effectiveSuit, isTrump } from '@/game/trump';
@@ -58,9 +58,29 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
   const [hideSummary, setHideSummary] = useState(false);
   useEffect(() => setHideSummary(false), [r.number, r.stage]);
   const [sideOpen, setSideOpen] = useState(false);
-  // The viewer's plays fly from the hand: note where the cards are just before they leave it.
+  // "Last trick": the felt shows the previous trick instead of the live one (L, or the status bar button).
+  const canPeek = (r.stage === 'play' || r.stage === 'roundOver') && r.tricks.length > 0;
+  const [peek, setPeek] = useState(false);
+  useEffect(() => {
+    if (!canPeek) setPeek(false);
+  }, [canPeek, r.number]);
+  useEffect(() => {
+    if (!canPeek) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'l' && e.key !== 'L')) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      setPeek((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canPeek]);
+  // The viewer's plays fly from the hand: note where the cards are just before they leave it. Playing also ends a peek.
   const send = (a: Action) => {
-    if (a.type === 'play' && a.seat === viewer) captureLaunch(viewer);
+    if (a.type === 'play' && a.seat === viewer) {
+      captureLaunch(viewer);
+      setPeek(false);
+    }
     return dispatch(a);
   };
 
@@ -74,9 +94,9 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
   return (
     <div className={`table-layout${sideOpen ? ' side-open' : ''}`}>
       <div className="table-main">
-        <StatusBar state={state} onToggleSide={() => setSideOpen((v) => !v)} />
+        <StatusBar state={state} onToggleSide={() => setSideOpen((v) => !v)} peek={canPeek ? { on: peek, set: setPeek } : null} />
         <TeamBanner state={state} viewer={viewer} />
-        <Felt state={state} bottom={viewer ?? 0} live />
+        <Felt state={state} bottom={viewer ?? 0} live peek={peek && canPeek} />
         {viewer !== null && (
           <>
             <ActionPanel
@@ -107,7 +127,7 @@ export function Table({ state, viewer, dispatch, summary, automation = null, sho
   );
 }
 
-function StatusBar({ state, onToggleSide }: { state: TractorState; onToggleSide: () => void }) {
+function StatusBar({ state, onToggleSide, peek }: { state: TractorState; onToggleSide: () => void; peek: { on: boolean; set: (v: boolean) => void } | null }) {
   const r = state.round;
   const t = trumpParts(r.trump);
   const m = materialize(scoringParams(state.config), state.rules.numDecks, state.rules.numDecks * 100);
@@ -153,8 +173,45 @@ function StatusBar({ state, onToggleSide }: { state: TractorState; onToggleSide:
           Trick {r.tricks.length + 1} · {r.hands.reduce((n, h) => Math.max(n, h.length), 0)} left
         </span>
       )}
-      <button className="secondary tiny side-toggle" onClick={onToggleSide} aria-label="Table, log and settings">☰</button>
+      <span className="status-actions">
+        {peek && <LastTrickButton on={peek.on} set={peek.set} />}
+        <button className="secondary tiny side-toggle" onClick={onToggleSide} aria-label="Table, log and settings">☰</button>
+      </span>
     </div>
+  );
+}
+
+/** Shows the previous trick: tap to toggle, or hold to peek until released. */
+function LastTrickButton({ on, set }: { on: boolean; set: (v: boolean) => void }) {
+  const press = useRef<{ at: number; was: boolean } | null>(null);
+  const release = (held: boolean) => {
+    const p = press.current;
+    press.current = null;
+    if (!p) return;
+    if (held || Date.now() - p.at > 350) set(false);
+    else set(!p.was);
+  };
+  return (
+    <button
+      type="button"
+      className={`secondary tiny last-trick-button${on ? ' active' : ''}`}
+      aria-pressed={on}
+      title="Show the previous trick (L) — tap to toggle, or hold to peek"
+      onPointerDown={(e) => {
+        if (e.button > 0) return;
+        press.current = { at: Date.now(), was: on };
+        set(true);
+      }}
+      onPointerUp={() => release(false)}
+      onPointerLeave={() => release(true)}
+      onPointerCancel={() => release(true)}
+      onClick={(e) => {
+        // Pointer presses are handled above; this is keyboard activation.
+        if (e.detail === 0) set(!on);
+      }}
+    >
+      ⟲ Last trick
+    </button>
   );
 }
 

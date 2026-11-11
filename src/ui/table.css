@@ -264,6 +264,16 @@ button.card:hover { filter: brightness(1.03); }
 .points-meter-lg > span { animation: meter-fill 950ms var(--ease-out) both; }
 @keyframes meter-fill { from { width: 0; } }
 
+.status-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.last-trick-button { white-space: nowrap; user-select: none; -webkit-user-select: none; touch-action: none; }
+.last-trick-button.active {
+  background: linear-gradient(180deg, #4d7fe6, #335fc0);
+  border-color: #6ea2ff;
+  color: #fff;
+  box-shadow: 0 1px 0 #1e3c86, 0 0 12px rgba(91, 147, 255, 0.55);
+  transform: translateY(2px);
+}
+
 /* ---------- the felt ---------- */
 
 .felt {
@@ -292,6 +302,24 @@ button.card:hover { filter: brightness(1.03); }
   border: 2px solid rgba(255, 255, 255, 0.06);
   pointer-events: none;
 }
+/* Peeking at the previous trick: a cool blue wash, so it doesn't read as the live trick. */
+.felt-peeking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(30, 60, 140, 0.16);
+  box-shadow: inset 0 0 0 3px rgba(120, 170, 255, 0.45), inset 0 0 50px rgba(60, 110, 220, 0.3);
+  pointer-events: none;
+  z-index: 1;
+  animation: fade-in 160ms ease both;
+}
+/* The live trick carries on underneath, out of sight (visibility, so running animations don't show through). */
+.seat-play-hidden, .points-pop.is-hidden { visibility: hidden; }
+.seat-play-peek { z-index: 4; animation: peek-in 200ms var(--ease-out) both; }
+@keyframes peek-in { from { opacity: 0; transform: translate(-50%, -50%) rotate(var(--tilt, 0deg)) scale(0.9); } }
+.felt-pill-peek { background: rgba(14, 30, 72, 0.88); border-color: rgba(120, 170, 255, 0.65); color: #dce8ff; }
+.felt-peeking .felt-center { z-index: 4; }
 .felt-watermark {
   position: absolute;
   inset: 0;
@@ -846,7 +874,7 @@ button.card:hover { filter: brightness(1.03); }
 @keyframes deck-tick { from { transform: translate(calc(var(--j) * -2px), calc(var(--j) * -2px - 5px)); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .seat-play-in, .seat-play-sweep, .seat-play-in.seat-play-sweep, .seat-play-in .card, .seat-play-sweep.seat-play-winner .card-row, .seat-bid-in,
+  .seat-play-in, .seat-play-sweep, .seat-play-in.seat-play-sweep, .seat-play-in .card, .seat-play-peek, .felt-peeking::after, .seat-play-sweep.seat-play-winner .card-row, .seat-bid-in,
   .hand-card, .seat-badge.seat-active, .seat-crown, .dots i, .points-pop, .felt-pill-wait, .felt-pill-won,
   .deck-stack .card:last-child, .deal-flight, .felt-banner, .felt-banner-icon, .trump-chip, .status-points strong,
   .seat-badge-points, .seat-bid-winning::after, .bid-button, .seat-play-note, .action-error, .log-row, .seat-row,

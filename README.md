@@ -1,5 +1,7 @@
 # Tractor · 升级
 
+**🚜 Play it:** https://dragonkyro.github.io/tractor/
+
 Tractor (升级 / shengji, "Finding Friends", "80 points") in the browser: hot-seat on one screen, against AI players, or online with friends through Firebase. Any number of players (2–12), any number of decks, classic fixed-partner Tractor or Finding Friends.
 
 The rules engine is a TypeScript port of the open-source [shengji](https://github.com/rbtying/shengji) Rust implementation (trick formats, tractors, throws, protections, bidding, scoring), with its house-rule options. The app structure (pure game core → room transport → stores → UI) follows the `catan` and `card-collecting` projects.
@@ -62,6 +64,7 @@ Everything follows shengji, with one deliberate exception. Sometimes a play answ
 - [x] Animations: cards are dealt from the deck to each seat; plays spin in from their seat and flip face up, the viewer's own fly up from the hand; a won trick flashes, sweeps to the winner and its points pop up there; the hand fans, lifts what's selected and slides cards into place when it re-sorts; bids pop with a ring, the active seat has a spinning ring, friends found and failed throws get a banner; the round summary counts the points up, with confetti when your side wins. All of it respects reduced motion. Synthesized sounds (toggle in Settings)
 - [x] Hand order: while bidding, every card stays in its printed suit (so suit lengths show for overcalling; the leading bid's suit last, then the jokers) with the trump numbers and jokers marked; once the kitty is taken, the trump suit, the trump numbers and the jokers sort together as one suit
 - [x] Trump is one suit when following: any trump-number card or joker follows a trump-suit lead and vice versa, a trump number never counts as its printed suit; within trump, trump suit < off-suit numbers (tied: the first played wins) < the trump-suit number < small joker < big joker (`rules.test.ts`, "trump is one suit")
+- [x] Last trick: the status bar's "Last trick" button (tap to toggle, hold to peek) or L shows the previous trick on the felt, in place of the live one, which carries on underneath; playing a card closes it. Shown even with "hide played cards", as shengji does (that option only hides the log)
 - [x] Drag across cards to select several; keyboard: Enter plays / confirms, Esc clears, H hints
 - [x] Team view: a banner says who you're with (and, in Finding Friends, which friends are still hidden and whether a card you hold could make you one); seat badges ringed by side
 - [x] Watch mode for all-AI tables with every hand face up
